@@ -2,9 +2,9 @@ name: Auto Update 7788.js
 
 on:
   schedule:
-    # 晚上 21:00 (UTC時間 13:00) 自動抓順球
+    # 台灣時間 21:00 自動執行（UTC 13:00）
     - cron: '0 13 * * 1-6'
-    # 晚上 23:00 (UTC時間 15:00) 自動抓落球覆蓋
+    # 台灣時間 23:00 自動執行（UTC 15:00）
     - cron: '0 15 * * 1-6'
   workflow_dispatch:
 
@@ -23,6 +23,5 @@ jobs:
       - name: Run update script
         run: |
           node -e '
-            console.log("正在背景執行自動更新...");
-            // 這裡會自動依照設定的時間點更新 7788.js
+            console.log("台灣時間 21:00 / 23:00 自動更新排程啟動");
           '
