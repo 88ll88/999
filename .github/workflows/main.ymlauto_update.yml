@@ -1,0 +1,25 @@
+name: Auto Update 7788.js
+
+on:
+  schedule:
+    - cron: '30 12 * * 1-6' # 代表每週一到週六的中午 12:30 自動執行（您可以自行更改時間）
+  workflow_dispatch: # 讓您可以隨時手動點擊執行測試
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Run update script
+        run: |
+          node -e '
+            console.log("正在執行自動更新...");
+            // 這裡可以放入您自動抓取並更新 7788.js 的 Node.js 程式邏輯
+          '
