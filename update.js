@@ -64,7 +64,6 @@ function getNextDrawDate(dateStr) {
 
 async function fetch9800Table(targetDate, mode) {
     try {
-        // 務必加上 http://
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
 
@@ -82,32 +81,30 @@ async function fetch9800Table(targetDate, mode) {
         // 截取該行附近的 HTML
         const subText = text.substring(dateIdx, dateIdx + 400);
 
-        // 利用正則尋找所有成對的數字（因為號碼都是兩位數 01~39）
-        // 我們直接把 HTML 裡的數字抓出來，並排除民國年、月、日
+        // 抓出所有合法數字 (01~39)
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
         if (!matches) return null;
 
-        let cleanNums = [];
-        for (let num of matches) {
-            // 排除剛好等於年、月、日的數字，避免抓到日期
-            if (num !== m && num !== d && num !== String(mingGuoYear) && num !== y.slice(-2)) {
-                if (!cleanNums.includes(num) || cleanNums.length < 10) {
-                    cleanNums.push(num);
-                }
-            }
+        console.log(`原始抓取到的數字清單: ${matches.join(',')}`);
+
+        // 依照您的規則：找到月份與日期之後的緊接 5 個數字就是落球
+        let mIndex = matches.indexOf(m);
+        let dIndex = matches.indexOf(d, mIndex + 1);
+
+        let targetSet = [];
+        // 如果能精準定位到月、日，就取日之後的 5 個數字
+        if (dIndex !== -1 && dIndex + 5 <= matches.length) {
+            targetSet = matches.slice(dIndex + 1, dIndex + 6);
+        } else if (matches.length >= 7) {
+            // 備用方案：直接取扣掉民國年、月、日之後的對應組別
+            let cleanNums = matches.filter(num => num !== m && num !== d && num !== String(mingGuoYear) && num !== y.slice(-2));
+            targetSet = mode === 'shun' ? cleanNums.slice(5, 10) : cleanNums.slice(0, 5);
         }
 
-        console.log(`過濾後的數字清單: ${cleanNums.join(',')}`);
+        console.log(`解析出的最終號碼: ${targetSet.join(',')}`);
 
-        // 9800 的該列中，通常會依序包含：期數、日期、第四欄(落球5顆)、第五欄(順球5顆)
-        // 從截圖來看，我們需要的第四欄（落球）剛好在前面那組
-        if (cleanNums.length >= 10) {
-            // mode === 'shun' 取後面 5 個，mode === 'luo' 取前面 5 個（第四欄落球）
-            const targetSet = mode === 'shun' ? cleanNums.slice(5, 10) : cleanNums.slice(0, 5);
-            
-            if (targetSet.length === 5 && !targetSet.includes('00')) {
-                return targetSet;
-            }
+        if (targetSet.length === 5 && !targetSet.includes('00')) {
+            return targetSet;
         }
 
     } catch (e) {
