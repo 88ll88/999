@@ -21,19 +21,15 @@ async function main() {
     let topRecord = records[0];
     let topDate = topRecord[0];
 
-    // 判斷首列狀態：
-    // 如果 topRecord 只有 2 個元素 [日期, [順球]]，代表還缺落球
     let needsLuoQiu = (topRecord.length === 2);
 
     let targetDate = topDate;
     if (!needsLuoQiu) {
-        // 如果已經完整（有順有落），則計算下一期目標日期來寫「新的一期順球」
         targetDate = getNextDrawDate(topDate);
     }
 
     console.log(`目標日期: ${targetDate}，當前狀態: ${needsLuoQiu ? '已有順球，準備補抓落球' : '準備抓取新一期順球'}`);
 
-    // 從 9800 抓取該日期的順球與落球
     let data = await fetch9800Data(targetDate);
     if (!data || !data.shun || !data.luo || data.shun.length !== 5 || data.luo.length !== 5) {
         console.log(`[${targetDate}] 9800 尚未更新或資料不完全，放棄寫入。`);
@@ -41,16 +37,13 @@ async function main() {
     }
 
     if (needsLuoQiu) {
-        // 情況 2：已經有順球，把落球補進去，完成該日期的封口
         topRecord.push(data.luo);
         console.log(`成功補上落球: [${data.luo.join(',')}]`);
     } else {
-        // 情況 1：還沒有當天資料，先將「順球」寫進首列
         records.unshift([targetDate, data.shun]);
         console.log(`成功寫入順球首列: [${data.shun.join(',')}]`);
     }
 
-    // 組合輸出格式
     let rows = records.map(r => {
         let dateStr = r[0];
         let shunStr = r[1].map(n => `'${n}'`).join(',');
@@ -70,7 +63,7 @@ async function main() {
 function getNextDrawDate(dateStr) {
     let d = new Date(dateStr);
     d.setDate(d.getDate() + 1);
-    if (d.getDay() === 0) d.setDate(d.getDate() + 1); // 略過週日
+    if (d.getDay() === 0) d.setDate(d.getDate() + 1);
     let yyyy = d.getFullYear();
     let mm = String(d.getMonth() + 1).padStart(2, '0');
     let dd = String(d.getDate()).padStart(2, '0');
@@ -96,17 +89,26 @@ async function fetch9800Data(targetDate) {
             return null;
         }
 
-        const subText = text.substring(dateIdx, dateIdx + 500);
+        const subText = text.substring(dateIdx, dateIdx + 600);
+        // 抓出所有 2 位數號碼
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
 
-        if (!matches || matches.length < 10) return null;
+        if (!matches || matches.length < 15) return null;
 
+        console.log(`9800 抓到的原始數字流: ${matches.join(',')}`);
+
+        // 在 9800 的 drop.html 表格中：
+        // 通常該行會有：期數、年、月、日，接著是 5 個順球，再接著 5 個落球
         let mIdx = matches.indexOf(m);
         let dIdx = matches.indexOf(d, mIdx + 1);
 
         if (dIdx !== -1 && matches.length >= dIdx + 11) {
-            let shun = matches.slice(dIdx + 1, dIdx + 6); // 順球
-            let luo = matches.slice(dIdx + 6, dIdx + 11); // 落球
+            // 嚴格對應：順球為緊接日期的前 5 個有效號碼，落球為隨後的 5 個有效號碼
+            let shun = matches.slice(dIdx + 1, dIdx + 6);
+            let luo = matches.slice(dIdx + 6, dIdx + 11);
+
+            console.log(`精準解析 -> 順球: [${shun.join(',')}] | 落球: [${luo.join(',')}]`);
+
             if (shun.length === 5 && luo.length === 5 && !shun.includes('00') && !luo.includes('00')) {
                 return { shun, luo };
             }
