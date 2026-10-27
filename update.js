@@ -64,50 +64,47 @@ function getNextDrawDate(dateStr) {
 
 async function fetch9800Table(targetDate, mode) {
     try {
-        // 同時嘗試抓取 9800 的主頁或 drop 頁面
+        // 務必加上 http://
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
-        console.log(`取得 9800 網頁內容長度: ${text.length}`);
 
-        // 轉換成民國日期格式試看看 (例如 2026-10-27 -> 115/10/27)
         const [y, m, d] = targetDate.split('-');
         const mingGuoYear = parseInt(y) - 1911;
         const targetStr1 = `${mingGuoYear}/${m}/${d}`;
         const targetStr2 = `${targetDate}`;
-        
-        console.log(`尋找日期字串: ${targetStr1} 或 ${targetStr2}`);
 
         let dateIdx = text.indexOf(targetStr1);
         if (dateIdx === -1) {
             dateIdx = text.indexOf(targetStr2);
         }
+        if (dateIdx === -1) return null;
 
-        if (dateIdx === -1) {
-            console.log('在網頁中找不到該日期的字串！');
-            return null;
-        }
-
+        // 截取該行附近的 HTML
         const subText = text.substring(dateIdx, dateIdx + 400);
-        console.log(`截取到的目標區段文字: ${subText.replace(/\s+/g, ' ')}`);
 
+        // 利用正則尋找所有成對的數字（因為號碼都是兩位數 01~39）
+        // 我們直接把 HTML 裡的數字抓出來，並排除民國年、月、日
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
-        if (!matches) {
-            console.log('在該區段找不到數字');
-            return null;
-        }
+        if (!matches) return null;
 
-        console.log(`找到的數字清單: ${matches.join(',')}`);
-
-        let validNums = [];
+        let cleanNums = [];
         for (let num of matches) {
-            if (num !== m && num !== d && num !== String(mingGuoYear)) {
-                validNums.push(num);
+            // 排除剛好等於年、月、日的數字，避免抓到日期
+            if (num !== m && num !== d && num !== String(mingGuoYear) && num !== y.slice(-2)) {
+                if (!cleanNums.includes(num) || cleanNums.length < 10) {
+                    cleanNums.push(num);
+                }
             }
         }
 
-        if (validNums.length >= 10) {
-            const targetSet = mode === 'shun' ? validNums.slice(-5) : validNums.slice(-10, -5);
-            console.log(`解析出的最終號碼 (${mode}): ${targetSet.join(',')}`);
+        console.log(`過濾後的數字清單: ${cleanNums.join(',')}`);
+
+        // 9800 的該列中，通常會依序包含：期數、日期、第四欄(落球5顆)、第五欄(順球5顆)
+        // 從截圖來看，我們需要的第四欄（落球）剛好在前面那組
+        if (cleanNums.length >= 10) {
+            // mode === 'shun' 取後面 5 個，mode === 'luo' 取前面 5 個（第四欄落球）
+            const targetSet = mode === 'shun' ? cleanNums.slice(5, 10) : cleanNums.slice(0, 5);
+            
             if (targetSet.length === 5 && !targetSet.includes('00')) {
                 return targetSet;
             }
