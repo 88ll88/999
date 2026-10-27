@@ -64,35 +64,57 @@ function getNextDrawDate(dateStr) {
 
 async function fetch9800Table(targetDate, mode) {
     try {
+        // 同時嘗試抓取 9800 的主頁或 drop 頁面
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
+        console.log(`取得 9800 網頁內容長度: ${text.length}`);
 
-        const dateIdx = text.indexOf(targetDate);
-        if (dateIdx === -1) return null;
-
-        const subText = text.substring(dateIdx, dateIdx + 500);
-        const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
-        if (!matches || matches.length < 10) return null;
-
+        // 轉換成民國日期格式試看看 (例如 2026-10-27 -> 115/10/27)
         const [y, m, d] = targetDate.split('-');
-        let validNums = [];
+        const mingGuoYear = parseInt(y) - 1911;
+        const targetStr1 = `${mingGuoYear}/${m}/${d}`;
+        const targetStr2 = `${targetDate}`;
         
+        console.log(`尋找日期字串: ${targetStr1} 或 ${targetStr2}`);
+
+        let dateIdx = text.indexOf(targetStr1);
+        if (dateIdx === -1) {
+            dateIdx = text.indexOf(targetStr2);
+        }
+
+        if (dateIdx === -1) {
+            console.log('在網頁中找不到該日期的字串！');
+            return null;
+        }
+
+        const subText = text.substring(dateIdx, dateIdx + 400);
+        console.log(`截取到的目標區段文字: ${subText.replace(/\s+/g, ' ')}`);
+
+        const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+        if (!matches) {
+            console.log('在該區段找不到數字');
+            return null;
+        }
+
+        console.log(`找到的數字清單: ${matches.join(',')}`);
+
+        let validNums = [];
         for (let num of matches) {
-            if (num !== m && num !== d && num !== y.slice(-2)) {
+            if (num !== m && num !== d && num !== String(mingGuoYear)) {
                 validNums.push(num);
             }
         }
 
         if (validNums.length >= 10) {
-            // 依照您的糾正：第四欄（落球）取前面那組，第五欄（順球）取後面那組
             const targetSet = mode === 'shun' ? validNums.slice(-5) : validNums.slice(-10, -5);
+            console.log(`解析出的最終號碼 (${mode}): ${targetSet.join(',')}`);
             if (targetSet.length === 5 && !targetSet.includes('00')) {
                 return targetSet;
             }
         }
 
     } catch (e) {
-        console.error('9800 解析失敗:', e.message);
+        console.error('9800 解析發生錯誤:', e.message);
     }
     return null;
 }
