@@ -22,7 +22,7 @@ async function main() {
     let records = eval('(' + match[1] + ')');
     let topDateStr = records[0][0];
 
-    // 如果最上面那一筆日期是無效號碼(包含00)，就以它為更新目標；否則計算下一天
+    // 如果最上面那一筆包含無效號碼(00)，就覆蓋今天；否則計算下一天
     let targetDate = topDateStr;
     if (!records[0][1].includes('00')) {
         targetDate = getNextDrawDate(topDateStr);
@@ -73,22 +73,18 @@ function getNextDrawDate(dateStr) {
     return `${yyyy}-${mm}-${dd}`;
 }
 
-// 精準抓取 5 個 01~39 的球號
+// 精準過濾 01~39 的兩位號碼
 function extract5Balls(htmlText, dateStr) {
-    // 找出日期後面的文字區段
     const dateIdx = htmlText.indexOf(dateStr);
     if (dateIdx === -1) return null;
 
     const subText = htmlText.substring(dateIdx, dateIdx + 2000);
-    // 匹配 01-39 範圍內的兩位數字
     const matches = subText.match(/(?:0[1-9]|[12][0-9]|3[0-9])/g);
     if (matches) {
-        // 過濾掉日期本身的數字，只取後續的 5 個號碼
-        const dateNumbers = dateStr.split('-'); // e.g. ["2026", "10", "27"]
+        const dateNumbers = dateStr.split(/[-/]/);
         let filtered = [];
         for (let num of matches) {
             if (filtered.length === 5) break;
-            // 避開月份與日期
             if (num !== dateNumbers[1] && num !== dateNumbers[2]) {
                 filtered.push(num);
             }
@@ -111,7 +107,6 @@ async function fetchShunQiu(targetDate) {
 }
 
 async function fetchLuoQiu(targetDate) {
-    // 來源 1: 9800
     try {
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
@@ -119,7 +114,6 @@ async function fetchLuoQiu(targetDate) {
         if (balls) return balls;
     } catch (e) {}
 
-    // 來源 2: 台彩
     try {
         const res = await fetch('https://www.taiwanlottery.com/lotto/result/daily_cash');
         const text = await res.text();
