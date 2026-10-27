@@ -21,7 +21,6 @@ async function main() {
     let topRecord = records[0];
     let topDate = topRecord[0];
 
-    // 判斷首列狀態：長度為 2 代表只有日期和順球，還缺落球
     let needsLuoQiu = (topRecord.length === 2);
 
     let targetDate = topDate;
@@ -31,7 +30,6 @@ async function main() {
 
     console.log(`目標日期: ${targetDate}，當前狀態: ${needsLuoQiu ? '準備補抓落球' : '準備抓取新一期順球'}`);
 
-    // 從 9800 抓取資料
     let data = await fetch9800Data(targetDate);
     if (!data || !data.shun || !data.luo || data.shun.length !== 5 || data.luo.length !== 5) {
         console.log(`[${targetDate}] 9800 尚未更新或資料不完全，放棄寫入。`);
@@ -39,16 +37,13 @@ async function main() {
     }
 
     if (needsLuoQiu) {
-        // 補上落球
         topRecord.push(data.luo);
         console.log(`成功補上落球: [${data.luo.join(',')}]`);
     } else {
-        // 新增首列順球
         records.unshift([targetDate, data.shun]);
         console.log(`成功寫入順球首列: [${data.shun.join(',')}]`);
     }
 
-    // 組合輸出格式
     let rows = records.map(r => {
         let dateStr = r[0];
         let shunStr = r[1].map(n => `'${n}'`).join(',');
@@ -81,59 +76,48 @@ async function fetch9800Data(targetDate) {
         const text = await res.text();
 
         const [y, m, d] = targetDate.split('-');
-        const mingGuoYear = parseInt(y) - 1911; // 例如 2026 -> 115
+        const mingGuoYear = parseInt(y) - 1911;
         
-        // 建立可能的日期搜尋字串 (例如 115/10/26 或 2026-10-26)
         const targets = [
             `${mingGuoYear}/${m}/${d}`,
             `${targetDate}`,
-            `${mingGuoYear}-${m}-${d}`,
-            `${parseInt(m)}/${parseInt(d)}` // 簡寫防呆
+            `${mingGuoYear}-${m}-${d}`
         ];
 
         let dateIdx = -1;
         for (let t of targets) {
             dateIdx = text.indexOf(t);
-            if (dateIdx !== -1) {
-                console.log(`成功配對到日期字串: ${t}`);
-                break;
-            }
+            if (dateIdx !== -1) break;
         }
 
         if (dateIdx === -1) {
-            console.log(`在 9800 網頁中找不到目標日期: ${targetDate}`);
+            console.log(`找不到目標日期: ${targetDate}`);
             return null;
         }
 
-        // 截取該日期之後的 HTML 範圍
-        const subText = text.substring(dateIdx, dateIdx + 800);
-        
-        // 抓出文字中所有兩位數號碼 (01~39)
+        const subText = text.substring(dateIdx, dateIdx + 700);
+        // 抓出所有 2 位數號碼
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
 
-        if (!matches || matches.length < 10) {
-            console.log('抓到的有效數字不足');
-            return null;
+        if (!matches || matches.length < 12) return null;
+
+        // 定位月份與日期的位置，確保從日期後面開始準確切出 10 個開獎號碼
+        let mIdx = matches.indexOf(m);
+        let dIdx = matches.indexOf(d, mIdx + 1);
+
+        if (dIdx !== -1 && matches.length >= dIdx + 11) {
+            // 9800 網頁中：
+            // 緊接在日期後面的前 5 個號碼是「順球」（開獎順序）
+            let shun = matches.slice(dIdx + 1, dIdx + 6);
+            // 接著的 5 個號碼是「落球」（大小順序）
+            let luo = matches.slice(dIdx + 6, dIdx + 11);
+
+            console.log(`正確解析 -> 順球(開獎順序): [${shun.join(',')}] | 落球(大小順序): [${luo.join(',')}]`);
+
+            if (shun.length === 5 && luo.length === 5 && !shun.includes('00') && !luo.includes('00')) {
+                return { shun, luo };
+            }
         }
-
-        console.log(`9800 該區段抓到的數字: ${matches.join(',')}`);
-
-        // 過濾掉剛好等於年月日或民國年的數字，留下純開獎號碼
-        let cleanNums = matches.filter(num => 
-            num !== m && 
-            num !== d && 
-            num !== String(mingGuoYear) && 
-            num !== y.slice(-2)
-        );
-
-        console.log(`過濾後的純號碼: ${cleanNums.join(',')}`);
-
-        if (cleanNums.length >= 10) {
-            let shun = cleanNums.slice(0, 5);
-            let luo = cleanNums.slice(5, 10);
-            return { shun, luo };
-        }
-
     } catch (e) {
         console.error('9800 抓取發生錯誤:', e.message);
     }
