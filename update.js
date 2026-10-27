@@ -29,15 +29,10 @@ async function main() {
 
     console.log(`現有最新日期: ${topDateStr}，目標更新日期: ${targetDate}`);
 
-    let balls = null;
-    if (mode === 'shun') {
-        balls = await fetchShunQiu(targetDate);
-    } else {
-        balls = await fetch9800LuoQiu(targetDate);
-    }
+    let balls = await fetch9800Table(targetDate, mode);
 
     if (!balls || balls.length !== 5 || balls.includes('00')) {
-        console.log(`[${targetDate}] 9800 尚未更新或號碼包含 00，放棄寫入。`);
+        console.log(`[${targetDate}] 9800 尚未更新或號碼不合法，放棄寫入。`);
         return;
     }
 
@@ -67,52 +62,37 @@ function getNextDrawDate(dateStr) {
     return `${yyyy}-${mm}-${dd}`;
 }
 
-async function fetchShunQiu(targetDate) {
-    try {
-        const res = await fetch('https://www.pilio.idv.tw/lto539/');
-        const text = await res.text();
-        return extractValidBalls(text, targetDate);
-    } catch (e) {}
-    return null;
-}
-
-// 專門針對 9800.com.tw 的落球頁面解析
-async function fetch9800LuoQiu(targetDate) {
+async function fetch9800Table(targetDate, mode) {
     try {
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
-        
-        // 9800 通常使用民國紀年或特定格式，我們把 targetDate (YYYY-MM-DD) 轉成民國或直接找尋對應區段
-        const [y, m, d] = targetDate.split('-');
-        const mianGuoYear = parseInt(y) - 1911;
-        const targetStr1 = `${mianGuoYear}/${m}/${d}`;
-        const targetStr2 = `${m}/${d}`;
 
-        let dateIdx = text.indexOf(targetStr1);
-        if (dateIdx === -1) {
-            dateIdx = text.indexOf(targetStr2);
-        }
-
+        const dateIdx = text.indexOf(targetDate);
         if (dateIdx === -1) return null;
 
-        const subText = text.substring(dateIdx, dateIdx + 300);
+        const subText = text.substring(dateIdx, dateIdx + 500);
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+        if (!matches || matches.length < 10) return null;
 
-        if (!matches) return null;
-
-        let validBalls = [];
+        const [y, m, d] = targetDate.split('-');
+        let validNums = [];
+        
         for (let num of matches) {
-            if (num !== '00' && num !== m && num !== d) {
-                if (!validBalls.includes(num)) {
-                    validBalls.push(num);
-                }
+            if (num !== m && num !== d && num !== y.slice(-2)) {
+                validNums.push(num);
             }
-            if (validBalls.length === 5) break;
         }
 
-        return validBalls.length === 5 ? validBalls : null;
+        if (validNums.length >= 10) {
+            // 依照您的糾正：第四欄（落球）取前面那組，第五欄（順球）取後面那組
+            const targetSet = mode === 'shun' ? validNums.slice(-5) : validNums.slice(-10, -5);
+            if (targetSet.length === 5 && !targetSet.includes('00')) {
+                return targetSet;
+            }
+        }
+
     } catch (e) {
-        console.error('9800 抓取失敗:', e.message);
+        console.error('9800 解析失敗:', e.message);
     }
     return null;
 }
