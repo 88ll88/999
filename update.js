@@ -1,7 +1,7 @@
 const fs = require('fs');
 
 async function main() {
-    console.log(`[${new Date().toISOString()}] 開始自動檢查 7788.js 更新...`);
+    console.log(`[${new Date().toISOString()}] 開始執行 7788.js 自動更新檢查...`);
 
     let content = '';
     try {
@@ -21,6 +21,7 @@ async function main() {
     let topRecord = records[0];
     let topDate = topRecord[0];
 
+    // 判斷首列狀態：長度為 2 代表只有 [日期, [順球]]，還缺落球
     let needsLuoQiu = (topRecord.length === 2);
 
     let targetDate = topDate;
@@ -28,22 +29,25 @@ async function main() {
         targetDate = getNextDrawDate(topDate);
     }
 
-    console.log(`目標日期: ${targetDate}，當前狀態: ${needsLuoQiu ? '準備補抓落球' : '準備抓取新一期順球'}`);
-
-    let data = await fetch9800Data(targetDate);
-    if (!data || !data.shun || !data.luo || data.shun.length !== 5 || data.luo.length !== 5) {
-        console.log(`[${targetDate}] 9800 尚未更新或資料不完全，放棄寫入。`);
-        return;
-    }
+    console.log(`目標日期: ${targetDate}，目前狀態: ${needsLuoQiu ? '補抓落球(複製順球)' : '抓取新一期順球'}`);
 
     if (needsLuoQiu) {
-        topRecord.push(data.luo);
-        console.log(`成功補上落球: [${data.luo.join(',')}]`);
+        // 第二階段：直接複製當前首列的順球作為落球
+        let existingShun = topRecord[1];
+        topRecord.push([...existingShun]);
+        console.log(`成功將順球複製並補上落球: [${existingShun.join(',')}]`);
     } else {
-        records.unshift([targetDate, data.shun]);
-        console.log(`成功寫入順球首列: [${data.shun.join(',')}]`);
+        // 第一階段：抓取新一期順球
+        let shun = await fetch9800Shun(targetDate);
+        if (!shun || shun.length !== 5) {
+            console.log(`[${targetDate}] 9800 順球尚未更新或資料不完全，放棄寫入。`);
+            return;
+        }
+        records.unshift([targetDate, shun]);
+        console.log(`成功寫入順球首列: [${shun.join(',')}]`);
     }
 
+    // 嚴格格式化輸出
     let rows = records.map(r => {
         let dateStr = r[0];
         let shunStr = r[1].map(n => `'${n}'`).join(',');
@@ -70,7 +74,7 @@ function getNextDrawDate(dateStr) {
     return `${yyyy}-${mm}-${dd}`;
 }
 
-async function fetch9800Data(targetDate) {
+async function fetch9800Shun(targetDate) {
     try {
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
@@ -95,27 +99,21 @@ async function fetch9800Data(targetDate) {
             return null;
         }
 
-        const subText = text.substring(dateIdx, dateIdx + 700);
-        // 抓出所有 2 位數號碼
+        const subText = text.substring(dateIdx, dateIdx + 500);
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
 
-        if (!matches || matches.length < 12) return null;
+        if (!matches || matches.length < 8) return null;
 
-        // 定位月份與日期的位置，確保從日期後面開始準確切出 10 個開獎號碼
         let mIdx = matches.indexOf(m);
         let dIdx = matches.indexOf(d, mIdx + 1);
 
-        if (dIdx !== -1 && matches.length >= dIdx + 11) {
-            // 9800 網頁中：
-            // 緊接在日期後面的前 5 個號碼是「順球」（開獎順序）
+        if (dIdx !== -1 && matches.length >= dIdx + 6) {
+            // 只抓取日期後緊接著的 5 個順球
             let shun = matches.slice(dIdx + 1, dIdx + 6);
-            // 接著的 5 個號碼是「落球」（大小順序）
-            let luo = matches.slice(dIdx + 6, dIdx + 11);
+            console.log(`成功抓取順球: [${shun.join(',')}]`);
 
-            console.log(`正確解析 -> 順球(開獎順序): [${shun.join(',')}] | 落球(大小順序): [${luo.join(',')}]`);
-
-            if (shun.length === 5 && luo.length === 5 && !shun.includes('00') && !luo.includes('00')) {
-                return { shun, luo };
+            if (shun.length === 5 && !shun.includes('00')) {
+                return shun;
             }
         }
     } catch (e) {
