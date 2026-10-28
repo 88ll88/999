@@ -1,7 +1,9 @@
 const fs = require('fs');
 
+const mode = process.argv[2] || 'luo';
+
 async function main() {
-    console.log(`[${new Date().toISOString()}] 開始執行 7788.js 自動更新檢查...`);
+    console.log(`[${new Date().toISOString()}] 開始執行更新，模式: ${mode}`);
 
     let content = '';
     try {
@@ -18,48 +20,39 @@ async function main() {
     }
 
     let records = eval('(' + match[1] + ')');
-    let topRecord = records[0];
-    let topDate = topRecord[0];
+    let topDateStr = records[0][0];
 
-    // 判斷首列狀態：長度為 2 代表只有 [日期, [順球]]，還缺落球
-    let needsLuoQiu = (topRecord.length === 2);
-
-    let targetDate = topDate;
-    if (!needsLuoQiu) {
-        targetDate = getNextDrawDate(topDate);
+    let targetDate = topDateStr;
+    if (!records[0][1].includes('00') && !records[0][1].includes('NaN')) {
+        targetDate = getNextDrawDate(topDateStr);
     }
 
-    console.log(`目標日期: ${targetDate}，目前狀態: ${needsLuoQiu ? '補抓落球(複製順球)' : '抓取新一期順球'}`);
+    console.log(`現有最新日期: ${topDateStr}，目標更新日期: ${targetDate}`);
 
-    if (needsLuoQiu) {
-        // 第二階段：直接複製當前首列的順球作為落球
-        let existingShun = topRecord[1];
-        topRecord.push([...existingShun]);
-        console.log(`成功將順球複製並補上落球: [${existingShun.join(',')}]`);
+    let balls = null;
+    if (mode === 'shun') {
+        balls = await fetchShunQiu(targetDate);
     } else {
-        // 第一階段：抓取新一期順球
-        let shun = await fetch9800Shun(targetDate);
-        if (!shun || shun.length !== 5) {
-            console.log(`[${targetDate}] 9800 順球尚未更新或資料不完全，放棄寫入。`);
-            return;
-        }
-        records.unshift([targetDate, shun]);
-        console.log(`成功寫入順球首列: [${shun.join(',')}]`);
+        balls = await fetchLuoQiu(targetDate);
     }
 
-    // 嚴格格式化輸出
-    let rows = records.map(r => {
-        let dateStr = r[0];
-        let shunStr = r[1].map(n => `'${n}'`).join(',');
-        if (r.length === 3) {
-            let luoStr = r[2].map(n => `'${n}'`).join(',');
-            return `['${dateStr}',[${shunStr}],[${luoStr}]]`;
-        } else {
-            return `['${dateStr}',[${shunStr}]]`;
-        }
-    }).join(',\n');
+    if (!balls || balls.length !== 5) {
+        console.log(`[${targetDate}] 尚未取得正確的 5 個號碼。`);
+        return;
+    }
 
+    console.log(`成功取得正確號碼: [${balls.join(',')}]`);
+
+    const idx = records.findIndex(r => r[0] === targetDate);
+    if (idx !== -1) {
+        records[idx] = [targetDate, balls];
+    } else {
+        records.unshift([targetDate, balls]);
+    }
+
+    let rows = records.map(r => `['${r[0]}',['${r[1].join("','")}']]`).join(',\n');
     let newContent = `var 7788 = [\n${rows}\n];\n`;
+
     fs.writeFileSync('./7788.js', newContent, 'utf8');
     console.log('7788.js 檔案更新完成！');
 }
@@ -74,52 +67,59 @@ function getNextDrawDate(dateStr) {
     return `${yyyy}-${mm}-${dd}`;
 }
 
-async function fetch9800Shun(targetDate) {
+async function fetchShunQiu(targetDate) {
+    try {
+        const res = await fetch('https://www.pilio.idv.tw/lto539/');
+        const text = await res.text();
+        return extractStrictBalls(text, targetDate);
+    } catch (e) {}
+    return null;
+}
+
+async function fetchLuoQiu(targetDate) {
+    // 優先改抓 9800 的落球頁面，並用更嚴格的陣列篩選
     try {
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
+        const balls = extractStrictBalls(text, targetDate);
+        if (balls) return balls;
+    } catch (e) {}
 
-        const [y, m, d] = targetDate.split('-');
-        const mingGuoYear = parseInt(y) - 1911;
-        
-        const targets = [
-            `${mingGuoYear}/${m}/${d}`,
-            `${targetDate}`,
-            `${mingGuoYear}-${m}-${d}`
-        ];
+    try {
+        const res = await fetch('https://www.taiwanlottery.com/lotto/result/daily_cash');
+        const text = await res.text();
+        const balls = extractStrictBalls(text, targetDate);
+        if (balls) return balls;
+    } catch (e) {}
 
-        let dateIdx = -1;
-        for (let t of targets) {
-            dateIdx = text.indexOf(t);
-            if (dateIdx !== -1) break;
-        }
+    return null;
+}
 
-        if (dateIdx === -1) {
-            console.log(`找不到目標日期: ${targetDate}`);
-            return null;
-        }
+// 嚴格過濾：只抓介於 '01' 到 '39' 之間、且不重複的雙位數
+function extractStrictBalls(htmlText, dateStr) {
+    const dateIdx = htmlText.indexOf(dateStr);
+    if (dateIdx === -1) return null;
 
-        const subText = text.substring(dateIdx, dateIdx + 500);
-        const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+    // 只取日期後面 300 個字元（避免掃到其他不相干的表格）
+    const subText = htmlText.substring(dateIdx, dateIdx + 300);
+    const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[9])\b/g);
+    
+    if (!matches) return null;
 
-        if (!matches || matches.length < 8) return null;
+    let validBalls = [];
+    const [y, m, d] = dateStr.split(/[-/]/);
 
-        let mIdx = matches.indexOf(m);
-        let dIdx = matches.indexOf(d, mIdx + 1);
-
-        if (dIdx !== -1 && matches.length >= dIdx + 6) {
-            // 只抓取日期後緊接著的 5 個順球
-            let shun = matches.slice(dIdx + 1, dIdx + 6);
-            console.log(`成功抓取順球: [${shun.join(',')}]`);
-
-            if (shun.length === 5 && !shun.includes('00')) {
-                return shun;
+    for (let num of matches) {
+        // 排除剛好等於年、月、日的數字，避免誤抓日期
+        if (num !== m && num !== d && num !== y.slice(-2)) {
+            if (!validBalls.includes(num)) {
+                validBalls.push(num);
             }
         }
-    } catch (e) {
-        console.error('9800 抓取發生錯誤:', e.message);
+        if (validBalls.length === 5) break;
     }
-    return null;
+
+    return validBalls.length === 5 ? validBalls : null;
 }
 
 main();
