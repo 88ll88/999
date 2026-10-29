@@ -33,23 +33,38 @@ function getTargetDrawDate() {
     return formatDate(target);
 }
 
+// 帶有 5 秒逾時保護的請求函式，絕不卡死
 function fetchUrl(url) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         const options = {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
             }
         };
-        https.get(url, options, (res) => {
+
+        const req = https.get(url, options, (res) => {
             let data = '';
             res.on('data', (chunk) => { data += chunk; });
             res.on('end', () => { resolve(data); });
-        }).on('error', (err) => { reject(err); });
+        });
+
+        req.on('error', (err) => {
+            console.error(`連線錯誤 (${url}):`, err.message);
+            resolve(null);
+        });
+
+        // 設置 5 秒超時強制返回，防止卡住
+        req.setTimeout(5000, () => {
+            req.destroy();
+            console.error(`連線逾時 (${url})`);
+            resolve(null);
+        });
     });
 }
 
 function parse539Balls(html) {
+    if (!html) return null;
     const regexList = [
         /539[^\d]*([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})/,
         /今彩539[^\d]*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/,
@@ -88,17 +103,14 @@ async function fetchFromMultipleSources(targetDateStr, isLuoQiu = false) {
     ];
 
     for (let src of sources) {
-        try {
-            console.log(`[嘗試來源] ${src.name}: ${src.url}`);
-            const html = await fetchUrl(src.url);
-            const balls = parse539Balls(html);
-            if (balls && balls.length === 5) {
-                console.log(`成功從 ${src.name} 抓到號碼: ${balls.join(', ')}`);
-                return balls;
-            }
-        } catch (err) {
-            console.error(`${src.name} 連線失敗: ${err.message}`);
+        console.log(`[嘗試來源] ${src.name}: ${src.url}`);
+        const html = await fetchUrl(src.url);
+        const balls = parse539Balls(html);
+        if (balls && balls.length === 5) {
+            console.log(`成功從 ${src.name} 抓到號碼: ${balls.join(', ')}`);
+            return balls;
         }
+        console.log(`${src.name} 未能取得有效號碼，換下一個...`);
     }
     return null;
 }
@@ -121,7 +133,6 @@ async function main() {
     const firstRowDate = match[1];
     console.log(`7788.js 首列日期為: ${firstRowDate}`);
 
-    // 強制執行落球替換（不受 21:00 時間限制）
     if (firstRowDate === targetDateStr) {
         console.log('強制執行：開始跨網站尋找落球（開出順序）並替換首列...');
         const luoQiuBalls = await fetchFromMultipleSources(targetDateStr, true);
@@ -134,12 +145,11 @@ async function main() {
                 console.log(`成功將 ${targetDateStr} 替換為落球：${luoQiuBalls.join(', ')}`);
             }
         } else {
-            console.log('所有網站皆尚未抓到落球資料。');
+            console.log('所有網站皆逾時或尚未抓到落球資料。');
         }
         return;
     }
 
-    // 若首列日期不同，則正常抓取順球插入
     console.log('首列日期不同，開始抓取順球...');
     const shunQiuBalls = await fetchFromMultipleSources(targetDateStr, false);
     if (shunQiuBalls) {
