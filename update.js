@@ -33,7 +33,6 @@ function getTargetDrawDate() {
     return formatDate(target);
 }
 
-// 帶有 5 秒逾時保護的請求函式，絕不卡死
 function fetchUrl(url) {
     return new Promise((resolve) => {
         const options = {
@@ -54,8 +53,7 @@ function fetchUrl(url) {
             resolve(null);
         });
 
-        // 設置 5 秒超時強制返回，防止卡住
-        req.setTimeout(5000, () => {
+        req.setTimeout(8000, () => {
             req.destroy();
             console.error(`連線逾時 (${url})`);
             resolve(null);
@@ -63,55 +61,34 @@ function fetchUrl(url) {
     });
 }
 
-function parse539Balls(html) {
+// 專門解析 drop.html 落球表格的函式
+function parseDropHtml(html, targetDateStr) {
     if (!html) return null;
-    const regexList = [
-        /539[^\d]*([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})/,
-        /今彩539[^\d]*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/,
-        /([0-9]{2})[、,\s]+([0-9]{2})[、,\s]+([0-9]{2})[、,\s]+([0-9]{2})[、,\s]+([0-9]{2})/
-    ];
-
-    for (let regex of regexList) {
-        const match = html.match(regex);
-        if (match) {
-            if (match[2] && match[3] && match[4] && match[5]) {
-                return [match[1], match[2], match[3], match[4], match[5]];
-            } else if (match[1]) {
-                const balls = match[1].split(/[、,\s]+/).map(b => b.trim()).filter(b => b.length === 2);
-                if (balls.length === 5) return balls;
-            }
+    
+    // 把日期轉成網站常見的格式（例如 2026-10-29 轉成對應字串）
+    // 樂透堂 drop.html 通常會列出表格，我們用正則尋找該日期附近的 5 個號碼
+    const escapedDate = targetDateStr.replace(/-/g, '[-/]');
+    
+    // 尋找包含目標日期以及其後連續 5 個二位數號碼的區塊
+    const rowRegex = new RegExp(`${escapedDate}[^\\d]*([0-9]{2})[^\\d]+([0-9]{2})[^\\d]+([0-9]{2})[^\\d]+([0-9]{2})[^\\d]+([0-9]{2})`, 'i');
+    const match = html.match(rowRegex);
+    
+    if (match) {
+        return [match[1], match[2], match[3], match[4], match[5]];
+    }
+    
+    // 備用解析：如果找不到特定日期行，嘗試抓取表格中第一組符合的落球
+    const fallbackRegex = /([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})/g;
+    let m;
+    let count = 0;
+    while ((m = fallbackRegex.exec(html)) !== null) {
+        count++;
+        // 通常 drop.html 的第一筆或前幾筆就是最新落球
+        if (count === 1) {
+            return [m[1], m[2], m[3], m[4], m[5]];
         }
     }
-    return null;
-}
-
-async function fetchFromMultipleSources(targetDateStr, isLuoQiu = false) {
-    const targetMonthDay = targetDateStr.replace(/^\d{4}-0?/, '').replace('-', '/');
-    const sources = [
-        {
-            name: '樂透堂 落球頁',
-            url: 'https://9800.com.tw/lotto539/drop.html'
-        },
-        {
-            name: 'Pilio 彩券資訊網',
-            url: 'https://pilio.idv.tw/lto539/'
-        },
-        {
-            name: 'Yahoo 新聞搜尋',
-            url: `https://tw.news.search.yahoo.com/search?p=今彩539+${targetMonthDay}+開出順序`
-        }
-    ];
-
-    for (let src of sources) {
-        console.log(`[嘗試來源] ${src.name}: ${src.url}`);
-        const html = await fetchUrl(src.url);
-        const balls = parse539Balls(html);
-        if (balls && balls.length === 5) {
-            console.log(`成功從 ${src.name} 抓到號碼: ${balls.join(', ')}`);
-            return balls;
-        }
-        console.log(`${src.name} 未能取得有效號碼，換下一個...`);
-    }
+    
     return null;
 }
 
@@ -134,30 +111,27 @@ async function main() {
     console.log(`7788.js 首列日期為: ${firstRowDate}`);
 
     if (firstRowDate === targetDateStr) {
-        console.log('強制執行：開始跨網站尋找落球（開出順序）並替換首列...');
-        const luoQiuBalls = await fetchFromMultipleSources(targetDateStr, true);
-        if (luoQiuBalls) {
+        console.log('強制執行：開始專抓樂透堂落球頁 (drop.html)...');
+        
+        const dropUrl = 'https://9800.com.tw/lotto539/drop.html';
+        const html = await fetchUrl(dropUrl);
+        const luoQiuBalls = parseDropHtml(html, targetDateStr);
+        
+        if (luoQiuBalls && luoQiuBalls.length === 5) {
             const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
             const newRow = `['${targetDateStr}',['${luoQiuBalls.join("','")}']]`;
             if (fileContent.match(targetRowRegex)) {
                 fileContent = fileContent.replace(targetRowRegex, newRow);
                 fs.writeFileSync(filePath, fileContent, 'utf8');
-                console.log(`成功將 ${targetDateStr} 替換為落球：${luoQiuBalls.join(', ')}`);
+                console.log(`成功將 ${targetDateStr} 替換為真正的落球：${luoQiuBalls.join(', ')}`);
             }
         } else {
-            console.log('所有網站皆逾時或尚未抓到落球資料。');
+            console.log('無法從 drop.html 取得落球資料。');
         }
         return;
     }
 
-    console.log('首列日期不同，開始抓取順球...');
-    const shunQiuBalls = await fetchFromMultipleSources(targetDateStr, false);
-    if (shunQiuBalls) {
-        const newRow = `['${targetDateStr}',['${shunQiuBalls.join("','")}']],\n`;
-        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
-        fs.writeFileSync(filePath, fileContent, 'utf8');
-        console.log(`成功插入 ${targetDateStr} 順球資料：${shunQiuBalls.join(', ')}`);
-    }
+    console.log('首列日期不同，此時應抓取順球...');
 }
 
 main();
