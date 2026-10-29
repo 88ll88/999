@@ -49,33 +49,60 @@ function fetchUrl(url) {
     });
 }
 
-// 抓取順球（大小順序）
-function extractShunQiuBalls(html) {
+// 通用號碼解析器（適用多種 HTML 結構）
+function parse539Balls(html) {
+    // 尋找連續 5 個雙位數號碼
     const regexList = [
-        /今彩539\s*[:：]\s*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/,
-        /今彩539[^\d]*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/
+        /539[^\d]*([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})/,
+        /今彩539[^\d]*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/,
+        /([0-9]{2})[、,\s]+([0-9]{2})[、,\s]+([0-9]{2})[、,\s]+([0-9]{2})[、,\s]+([0-9]{2})/
     ];
+
     for (let regex of regexList) {
         const match = html.match(regex);
-        if (match && match[1]) {
-            const balls = match[1].split(/[、,\s]+/).map(b => b.trim()).filter(b => b.length === 2);
-            if (balls.length === 5) return balls;
+        if (match) {
+            if (match[2] && match[3] && match[4] && match[5]) {
+                return [match[1], match[2], match[3], match[4], match[5]];
+            } else if (match[1]) {
+                const balls = match[1].split(/[、,\s]+/).map(b => b.trim()).filter(b => b.length === 2);
+                if (balls.length === 5) return balls;
+            }
         }
     }
     return null;
 }
 
-// 抓取落球（開出順序）
-function extractLuoQiuBalls(html) {
-    const regexList = [
-        /開出順序\s*[:：]\s*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/,
-        /落球\s*[:：]\s*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/
+// 輪流試用多個網站抓取號碼
+async function fetchFromMultipleSources(targetDateStr, isLuoQiu = false) {
+    const targetMonthDay = targetDateStr.replace(/^\d{4}-0?/, '').replace('-', '/');
+    
+    // 定義多個備援網站清單
+    const sources = [
+        {
+            name: 'Pilio 彩券資訊網',
+            url: 'https://pilio.idv.tw/lto539/'
+        },
+        {
+            name: '樂透堂 539',
+            url: isLuoQiu ? 'https://9800.com.tw/lotto539/drop.html' : 'https://9800.com.tw/lotto539/'
+        },
+        {
+            name: 'Yahoo 新聞搜尋',
+            url: `https://tw.news.search.yahoo.com/search?p=今彩539+${targetMonthDay}+${isLuoQiu ? '開出順序' : '開獎號碼'}`
+        }
     ];
-    for (let regex of regexList) {
-        const match = html.match(regex);
-        if (match && match[1]) {
-            const balls = match[1].split(/[、,\s]+/).map(b => b.trim()).filter(b => b.length === 2);
-            if (balls.length === 5) return balls;
+
+    for (let src of sources) {
+        try {
+            console.log(`[嘗試來源] ${src.name}: ${src.url}`);
+            const html = await fetchUrl(src.url);
+            const balls = parse539Balls(html);
+            if (balls && balls.length === 5) {
+                console.log(`成功從 ${src.name} 抓到號碼: ${balls.join(', ')}`);
+                return balls;
+            }
+        } catch (err) {
+            console.error(`${src.name} 連線失敗: ${err.message}`);
         }
     }
     return null;
@@ -99,31 +126,24 @@ async function main() {
     const firstRowDate = match[1];
     console.log(`7788.js 首列日期為: ${firstRowDate}`);
 
-    const targetMonthDay = targetDateStr.replace(/^\d{4}-0?/, '').replace('-', '/');
     const tw = getTaiwanTime();
     const currentHourMin = tw.getHours() * 100 + tw.getMinutes();
 
-    // 狀況一：首列已經是今天，且時間已過 21:00，檢查並將順球替換為落球
+    // 1. 首列已經是今天：21:00 後嘗試多網站抓落球並替換
     if (firstRowDate === targetDateStr) {
         if (currentHourMin >= 2100) {
-            console.log('時間已過 21:00，開始尋找落球（開出順序）...');
-            const luoQiuUrl = `https://tw.news.search.yahoo.com/search?p=今彩539+${targetMonthDay}+開出順序`;
-            try {
-                const html = await fetchUrl(luoQiuUrl);
-                const luoQiuBalls = extractLuoQiuBalls(html);
-                if (luoQiuBalls && luoQiuBalls.length === 5) {
-                    const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
-                    const newRow = `['${targetDateStr}',['${luoQiuBalls.join("','")}']]`;
-                    if (fileContent.match(targetRowRegex)) {
-                        fileContent = fileContent.replace(targetRowRegex, newRow);
-                        fs.writeFileSync(filePath, fileContent, 'utf8');
-                        console.log(`成功將 ${targetDateStr} 順球替換為落球（開出順序）：${luoQiuBalls.join(', ')}`);
-                    }
-                } else {
-                    console.log('尚未在 Yahoo 找到落球資料，保持原樣。');
+            console.log('時間已過 21:00，開始跨網站尋找落球（開出順序）...');
+            const luoQiuBalls = await fetchFromMultipleSources(targetDateStr, true);
+            if (luoQiuBalls) {
+                const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
+                const newRow = `['${targetDateStr}',['${luoQiuBalls.join("','")}']]`;
+                if (fileContent.match(targetRowRegex)) {
+                    fileContent = fileContent.replace(targetRowRegex, newRow);
+                    fs.writeFileSync(filePath, fileContent, 'utf8');
+                    console.log(`成功替換 ${targetDateStr} 為落球：${luoQiuBalls.join(', ')}`);
                 }
-            } catch (err) {
-                console.error('抓取落球失敗:', err.message);
+            } else {
+                console.log('所有網站皆尚未釋出落球資料，保持原樣。');
             }
         } else {
             console.log('首列已是最新日期，未到 21:00 暫不替換落球。');
@@ -131,22 +151,16 @@ async function main() {
         return;
     }
 
-    // 狀況二：首列還沒更新，先抓順球插入
-    const shunQiuUrl = `https://tw.news.search.yahoo.com/search?p=今彩539+${targetMonthDay}+開獎號碼`;
-    try {
-        console.log('正在抓取順球（大小順序）...');
-        const html = await fetchUrl(shunQiuUrl);
-        const shunQiuBalls = extractShunQiuBalls(html);
-        if (shunQiuBalls && shunQiuBalls.length === 5) {
-            const newRow = `['${targetDateStr}',['${shunQiuBalls.join("','")}']],\n`;
-            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
-            fs.writeFileSync(filePath, fileContent, 'utf8');
-            console.log(`成功插入 ${targetDateStr} 順球資料：${shunQiuBalls.join(', ')}`);
-        } else {
-            console.log('尚未抓到順球資料。');
-        }
-    } catch (err) {
-        console.error('抓取順球失敗:', err.message);
+    // 2. 首列還沒更新：跨網站抓順球並插入
+    console.log('開始跨網站尋找順球（大小順序）...');
+    const shunQiuBalls = await fetchFromMultipleSources(targetDateStr, false);
+    if (shunQiuBalls) {
+        const newRow = `['${targetDateStr}',['${shunQiuBalls.join("','")}']],\n`;
+        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
+        fs.writeFileSync(filePath, fileContent, 'utf8');
+        console.log(`成功插入 ${targetDateStr} 順球資料：${shunQiuBalls.join(', ')}`);
+    } else {
+        console.log('所有網站皆尚未抓到當日順球號碼。');
     }
 }
 
