@@ -53,7 +53,7 @@ function fetchUrl(url) {
             resolve(null);
         });
 
-        req.setTimeout(6000, () => {
+        req.setTimeout(8000, () => {
             req.destroy();
             console.error(`連線逾時 (${url})`);
             resolve(null);
@@ -61,32 +61,57 @@ function fetchUrl(url) {
     });
 }
 
-function parse539Balls(html) {
-    if (!html) return null;
-    const regexList = [
-        /539[^\d]*([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})/,
-        /今彩539[^\d]*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/,
-        /([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})[^\d]+([0-9]{2})/
-    ];
-
-    for (let regex of regexList) {
-        const match = html.match(regex);
-        if (match) {
-            if (match[2] && match[3] && match[4] && match[5]) {
-                return [match[1], match[2], match[3], match[4], match[5]];
-            } else if (match[1]) {
-                const balls = match[1].split(/[、,\s]+/).map(b => b.trim()).filter(b => b.length === 2);
-                if (balls.length === 5) return balls;
-            }
+// 驗證 539 號碼範圍 (01-39)
+function validate539Balls(balls) {
+    if (!balls || balls.length !== 5) return null;
+    for (let b of balls) {
+        const num = parseInt(b, 10);
+        if (isNaN(num) || num < 1 || num > 39) {
+            return null;
         }
     }
+    return balls;
+}
+
+// 解析網頁，並嚴格確認附近文字包含目標日期
+function parseBallsWithDateCheck(html, targetDateStr) {
+    if (!html) return null;
+
+    // 將 2026-10-29 轉成各種常見網頁日期格式 (例如 2026-10-29, 10/29, 10月29日)
+    const [year, month, day] = targetDateStr.split('-');
+    const mTrim = month.replace(/^0/, '');
+    const dTrim = day.replace(/^0/, '');
+    
+    const datePatterns = [
+        targetDateStr,
+        `${mTrim}/${dTrim}`,
+        `${month}/${day}`,
+        `${mTrim}月${dTrim}日`
+    ];
+
+    // 檢查網頁內是否包含目標日期
+    let hasDateMatch = datePatterns.some(p => html.includes(p));
+    if (!hasDateMatch) {
+        console.log(`網頁內容中未找到對應的日期 (${targetDateStr})，跳過此來源。`);
+        return null;
+    }
+
+    // 尋找符合 01-39 範圍的 5 個數字組合
+    const regex = /([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])/g;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+        const candidate = [match[1], match[2], match[3], match[4], match[5]];
+        if (validate539Balls(candidate)) {
+            return candidate;
+        }
+    }
+
     return null;
 }
 
-async function fetchFromMultipleWebsites(targetDateStr) {
+async function fetchVerifiedBalls(targetDateStr) {
     const targetMonthDay = targetDateStr.replace(/^\d{4}-0?/, '').replace('-', '/');
     
-    // 建立包含多個不同網站與搜尋來源的清單（完全不使用 9800）
     const sources = [
         {
             name: 'Pilio 彩券資訊網',
@@ -97,11 +122,7 @@ async function fetchFromMultipleWebsites(targetDateStr) {
             url: 'https://www.taiwanlottery.com.tw/'
         },
         {
-            name: 'Yahoo 新聞搜尋 (開出順序)',
-            url: `https://tw.news.search.yahoo.com/search?p=今彩539+${targetMonthDay}+開出順序`
-        },
-        {
-            name: 'Yahoo 新聞搜尋 (開獎號碼)',
+            name: 'Yahoo 新聞搜尋',
             url: `https://tw.news.search.yahoo.com/search?p=今彩539+${targetMonthDay}+開獎號碼`
         }
     ];
@@ -109,12 +130,12 @@ async function fetchFromMultipleWebsites(targetDateStr) {
     for (let src of sources) {
         console.log(`[嘗試來源] ${src.name}: ${src.url}`);
         const html = await fetchUrl(src.url);
-        const balls = parse539Balls(html);
-        if (balls && balls.length === 5) {
-            console.log(`成功從 ${src.name} 抓到號碼: ${balls.join(', ')}`);
+        const balls = parseBallsWithDateCheck(html, targetDateStr);
+        if (balls) {
+            console.log(`成功通過日期與號碼驗證，自 ${src.name} 取得: ${balls.join(', ')}`);
             return balls;
         }
-        console.log(`${src.name} 未能取得有效號碼，換下一個網站...`);
+        console.log(`${src.name} 未能通過日期或號碼驗證，換下一個...`);
     }
     return null;
 }
@@ -138,18 +159,18 @@ async function main() {
     console.log(`7788.js 首列日期為: ${firstRowDate}`);
 
     if (firstRowDate === targetDateStr) {
-        console.log('強制執行：開始透過多個備援網站尋找並替換首列號碼...');
-        const balls = await fetchFromMultipleWebsites(targetDateStr);
+        console.log('強制執行：開始比對日期並抓取正確號碼替換首列...');
+        const balls = await fetchVerifiedBalls(targetDateStr);
         if (balls) {
             const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
             const newRow = `['${targetDateStr}',['${balls.join("','")}']]`;
             if (fileContent.match(targetRowRegex)) {
                 fileContent = fileContent.replace(targetRowRegex, newRow);
                 fs.writeFileSync(filePath, fileContent, 'utf8');
-                console.log(`成功將 ${targetDateStr} 更新為：${balls.join(', ')}`);
+                console.log(`成功將 ${targetDateStr} 更新為驗證無誤的號碼：${balls.join(', ')}`);
             }
         } else {
-            console.log('所有備援網站皆尚未抓到號碼。');
+            console.log('所有來源皆未找到符合當日日期的正確號碼。');
         }
         return;
     }
