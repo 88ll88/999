@@ -1,34 +1,37 @@
-name: 539 Auto Update
+name: Auto Update 539 Data
 
 on:
   schedule:
-    - cron: '40 12 * * 1-6'
-    - cron: '00 13 * * 1-6'
-    - cron: '30 13 * * 1-6'
-    - cron: '00 14 * * 1-6'
-  workflow_dispatch:
+    # 每天 20:40, 20:50, 21:00, 21:30, 22:00 執行 (注意 GitHub Actions 時間為 UTC，需換算或調整)
+    # 台灣時間 (UTC+8) 20:40 = UTC 12:40
+    - cron: '40,50 12 * * 1-6'
+    # 台灣時間 (UTC+8) 21:00, 21:30, 22:00 = UTC 13:00, 13:30, 14:00
+    - cron: '0,30 13 * * 1-6'
+    - cron: '0 14 * * 1-6'
+
+  workflow_dispatch: # 允許手動觸發
 
 jobs:
-  update-lotto:
+  update:
     runs-on: ubuntu-latest
     steps:
-      - name: 檢查專案原始碼
-        uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
-      - name: 安裝最新 Node.js 環境
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: 20 # 這裡強制改成最新穩定的 v20，徹底解決錯誤！
+          node-version: '18'
 
-      - name: 安裝網頁爬蟲套件
+      - name: Install Dependencies
         run: npm install axios cheerio
 
-      - name: 執行更新腳本
-        run: node update.js
+      - name: Run Update Script
+        run: node 999/update.js
 
-      - name: 將最新資料提交回 GitHub 倉庫
+      - name: Commit and Push Changes
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add 7788.js
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto updated 539 numbers" && git push)
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add 999/7788.js
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto update 7788.js [skip ci]" && git push)
