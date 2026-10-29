@@ -12,7 +12,7 @@ function getTargetDate() {
     target.setUTCDate(target.getUTCDate() - 1); // 20:40 前算昨天
   }
   
-  // 如果目標日期是週日，因為休息，再往前推一天到週六
+  // 如果目標日期是週日，休息往前推一天到週六
   if (target.getUTCDay() === 0) {
     target.setUTCDate(target.getUTCDate() - 1);
   }
@@ -40,7 +40,6 @@ async function main() {
     fileContent = 'var 7788 = [];';
   }
 
-  // 使用正則表達式把資料陣列挖出來
   const dataMatch = fileContent.match(/var\s+7788\s*=\s*(\[[\s\S]*?\]);/);
   let localData = [];
   if (dataMatch) {
@@ -52,53 +51,58 @@ async function main() {
   }
 
   const latestDate = localData.length > 0 ? localData[0][0] : '';
+  const latestBalls = localData.length > 0 ? localData[0][1] : [];
   console.log(`[系統訊息] 目前 7788.js 最新的一期日期為: ${latestDate}`);
 
-  // 檢查是否已更新
+  // 判斷當前首列的狀態
+  let isSorted = false;
+  if (latestBalls.length === 5) {
+    isSorted = JSON.stringify(latestBalls) === JSON.stringify([...latestBalls].sort((a, b) => parseInt(a) - parseInt(b)));
+  }
+
+  // 情況一：最新日期已經符合目標日期
   if (latestDate === targetDate) {
-    // 檢查第一筆是否為順球（由小到大排序），如果是，且現在時間進入落球更新時段，需要嘗試更新成落球
-    const isSorted = JSON.stringify(localData[0][1]) === JSON.stringify([...localData[0][1]].sort((a,b)=>a-b));
-    const nowHour = new Date(new Date().getTime() + (8 * 60 * 60 * 1000)).getUTCHours();
-    
-    if (isSorted && nowHour >= 21) {
-      console.log(`[更新落球] 第一筆目前為順球，且時間已過 21:00，嘗試替換為落球...`);
-      const dropBalls = await fetch9800Drop(targetDate);
-      if (dropBalls) {
-        localData[0][1] = dropBalls;
-        saveData(localData);
-        console.log(`[成功] 已將首列順球替換成落球: ${JSON.stringify(dropBalls)}`);
-        return;
-      }
+    // 如果首列是落球（非順球），代表全部更新完成，直接退出
+    if (!isSorted) {
+      console.log('[完成] 本期落球已成功更新，全部流程結束。');
+      return;
     }
-    console.log('[完成] 本期資料已是最新狀態，無需重複更新。');
+    
+    // 如果首列是順球，代表之前搶先更新了順球，現在需要尋找落球來替換它
+    console.log('[巡邏] 首列目前為順球，嘗試尋找落球進行替換...');
+    const dropBalls = await fetch9800Drop(targetDate);
+    if (dropBalls) {
+      localData[0][1] = dropBalls; // 替換首列號碼為落球
+      saveData(localData);
+      console.log(`[成功] 已將首列順球替換成落球: ${JSON.stringify(dropBalls)}`);
+    } else {
+      console.log('[等待] 9800 樂透堂尚未更新落球，繼續保持順球狀態。');
+    }
     return;
   }
 
-  // 判斷更新期數
+  // 情況二：首列日期小於目標日期，需要新增期數
   if (latestDate < targetDate) {
-    console.log(`[觸發更新] 需要更新資料！`);
+    console.log(`[觸發更新] 偵測到新期數，開始抓取流程...`);
     
-    // 優先嘗試直接獲取今日最新落球/順球
-    let newBalls = null;
-    const nowHour = new Date(new Date().getTime() + (8 * 60 * 60 * 1000)).getUTCHours();
-    
-    // 21:00 後直接去 9800 抓落球序
-    if (nowHour >= 21) {
-      newBalls = await fetch9800Drop(targetDate);
-    }
-    
-    // 如果沒過 21:00 或 9800 還沒出來，去 Yahoo 抓順球
-    if (!newBalls) {
-      newBalls = await fetchYahooSort();
-    }
-
-    if (newBalls) {
-      // 插入首列，嚴格排除空格
-      localData.unshift([targetDate, newBalls]);
+    // 1. 優先找落球
+    const dropBalls = await fetch9800Drop(targetDate);
+    if (dropBalls) {
+      localData.unshift([targetDate, dropBalls]);
       saveData(localData);
-      console.log(`[成功] 已成功插入新期數: ['${targetDate}', ${JSON.stringify(newBalls)}]`);
+      console.log(`[成功] 直接抓到落球，插入首列: ['${targetDate}', ${JSON.stringify(dropBalls)}]`);
+      return;
+    }
+    
+    // 2. 若沒有落球，則抓取順球並插入首列，隨後停止本次順球查找
+    console.log('[提示] 未找到落球，改為尋找順球搶先登記...');
+    const sortBalls = await fetchYahooSort();
+    if (sortBalls) {
+      localData.unshift([targetDate, sortBalls]);
+      saveData(localData);
+      console.log(`[成功] 抓到順球，搶先插入首列: ['${targetDate}', ${JSON.stringify(sortBalls)}]`);
     } else {
-      console.log(`[延遲] 外部開獎網頁尚未更新，等待下一次自動執行。`);
+      console.log('[延遲] 外部開獎網頁皆尚未更新，等待下一次自動執行。');
     }
   }
 }
@@ -114,8 +118,7 @@ async function fetchYahooSort() {
     if (ballMatch) {
       return ballMatch[1].split('","').map(n => String(n).padStart(2, '0'));
     }
-    // 備用正則
-    const balls = [...html.matchAll(/class="[^"]*ball[^"]*"[^>]*>(\d+)</gi)].map(m => String(m[1]).padStart(2, '0'));
+    const balls = [...html.matchAll(/class="[^"]*ball[^"]*"[^>]*>(\d+)</gi)].map(m => String(m).padStart(2, '0'));
     if (balls.length >= 5) return balls.slice(0, 5).sort((a,b)=>a-b);
   } catch(e) {
     console.log(`抓取 Yahoo 順球失敗: ${e.message}`);
@@ -130,7 +133,7 @@ async function fetch9800Drop(dateStr) {
       headers: { 'User-Agent': 'Mozilla/5.0' }
     });
     const html = await res.text();
-    // 精準匹配當天日期的落球序
+    // 精準匹配當天日期的落球序表格行
     const regex = new RegExp(`${dateStr}[\\s\\S]*?週[^>]*?>\\s*([\\d\\s]+?)\\s*<`);
     const match = html.match(regex);
     if (match) {
@@ -145,7 +148,6 @@ async function fetch9800Drop(dateStr) {
 // 儲存資料回 7788.js
 function saveData(data) {
   const jsonStr = JSON.stringify(data);
-  // 還原成你指定的緊湊無空格 var 7788 = [...] 格式
   const finalContent = `var 7788 = ${jsonStr};`;
   fs.writeFileSync('7788.js', finalContent, 'utf8');
 }
