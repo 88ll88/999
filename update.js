@@ -38,34 +38,36 @@ async function main() {
     fileContent = 'var 7788 = [];';
   }
 
-  // 挖出陣列字串並解析
-  const dataMatch = fileContent.match(/var\s+7788\s*=\s*(\[[\s\S]*?\]);/);
+  // 【精準修正】修正正則表達式，精準撈出舊資料的日期與號碼
   let localData = [];
-  if (dataMatch) {
-    try {
-      localData = eval(dataMatch[1]);
-    } catch(e) {
-      localData = [];
-    }
+  const rowRegex = /\['(\d{4}-\d{2}-\d{2})',\s*\[([\d\s',]+)\]\]/g;
+  let match;
+  while ((match = rowRegex.exec(fileContent)) !== null) {
+    const date = match[1];
+    // 把 ['35','13'...] 轉回乾淨的 ['35','13'...] 陣列
+    const balls = match[2].replace(/['\s]/g, '').split(',');
+    localData.push([date, balls]);
   }
 
-  // 查找 7788.js 首列日期
   const latestDate = localData.length > 0 ? localData[0][0] : '';
+  const latestBalls = localData.length > 0 ? localData[0][1] : [];
   console.log(`[系統訊息] 目前 7788.js 首列日期為: ${latestDate}`);
 
+  // 檢查首列是否為順球（由小到大排序）
+  let isSorted = false;
+  if (latestBalls.length === 5) {
+    isSorted = JSON.stringify(latestBalls) === JSON.stringify([...latestBalls].sort((a, b) => parseInt(a) - parseInt(b)));
+  }
+
+  // =============================================================
   // 情境一：若首列日期等於目標日期
+  // =============================================================
   if (latestDate === targetDate) {
-    const latestBalls = localData[0][1];
-    // 檢查首列是否為順球（由小到大排序）
-    const isSorted = JSON.stringify(latestBalls) === JSON.stringify([...latestBalls].sort((a, b) => parseInt(a) - parseInt(b)));
-    
     if (isSorted) {
-      console.log(`[巡邏] 首列為順球，前往 9800 查找落球進行替換...`);
+      console.log(`[巡邏] 首列目前為順球，前往 9800 查找落球進行替換...`);
       const dropBalls = await fetch9800Drop(targetDate);
       if (dropBalls) {
-        // 替換首列的順球為落球
-        localData[0][1] = dropBalls; 
-        // 【重要修正】立刻寫入 7788.js 檔案！
+        localData[0][1] = dropBalls; // 替換首列的順球為落球
         saveData(localData); 
         console.log(`[成功] 已將 7788.js 首列順球替換成落球並儲存！`);
       } else {
@@ -77,55 +79,50 @@ async function main() {
     return;
   }
 
-  // 計算相差天數
-  const d1 = new Date(latestDate);
-  const d2 = new Date(targetDate);
-  const diffTime = Math.abs(d2 - d1);
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  // =============================================================
+  // 情境二：需更新（包含更新 1 期 或 2 期以上）
+  // =============================================================
+  if (latestDate < targetDate) {
+    // 計算相差天數
+    const d1 = new Date(latestDate);
+    const d2 = new Date(targetDate);
+    const diffTime = Math.abs(d2 - d1);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-  // -------------------------------------------------------------
-  // 核心邏輯 A：若首列日期小於目標日期且差距 2 期以上
-  // -------------------------------------------------------------
-  if (diffDays > 1 && latestDate < targetDate) {
-    console.log(`[情境] 需更新 2 期以上，前往 9800 補抓歷史落球...`);
-    const allDropData = await fetchAll9800Drops(latestDate, targetDate);
-    if (allDropData && allDropData.length > 0) {
-      // 日期最上方為最新，倒序插入首列
-      for (const item of allDropData.reverse()) {
-        localData.unshift([item.date, item.balls]);
+    // A. 差距 2 期以上：去 9800 補抓歷史落球
+    if (diffDays > 1 && latestDate !== '') {
+      console.log(`[情境] 需更新 2 期以上，前往 9800 補抓歷史落球...`);
+      const allDropData = await fetchAll9800Drops(latestDate, targetDate);
+      if (allDropData && allDropData.length > 0) {
+        for (const item of allDropData.reverse()) {
+          localData.unshift([item.date, item.balls]);
+        }
+        saveData(localData);
+        console.log(`[成功] 已將多期歷史落球寫入 7788.js`);
       }
-      // 立刻寫入 7788.js 檔案！
-      saveData(localData);
-      console.log(`[成功] 已將多期歷史落球寫入 7788.js`);
+      return;
     }
-    return;
-  }
 
-  // -------------------------------------------------------------
-  // 核心邏輯 B：若首列日期需更新 1 期
-  // -------------------------------------------------------------
-  if (diffDays === 1 || latestDate < targetDate) {
-    console.log(`[情境] 需更新 1 期，更新日期為 ${targetDate}`);
+    // B. 需更新 1 期（例如今天 2026-10-29 開獎）
+    console.log(`[情境] 需更新 1 期，目標日期為 ${targetDate}`);
     
-    // 1. 用 Yahoo 查找順球×5
+    // 1. 查找 Yahoo 順球×5
     console.log(`[執行] 前往 Yahoo 查找順球...`);
     const sortBalls = await fetchYahooSort();
     if (sortBalls) {
-      // 2. 先把順球插入首列變數
+      // 2. 順球 OK 就插入首列變數，並且【立刻寫入 7788.js】
       localData.unshift([targetDate, sortBalls]);
-      // 3. 【立刻寫入 7788.js】讓 20:40 第一時間有順球資料可以用！
       saveData(localData);
-      console.log(`[順球寫入] 已將順球寫入 7788.js 首列`);
+      console.log(`[順球寫入] 順球 OK，已插入首列並寫入 7788.js`);
       
-      // 4. 不要停！緊接著前往 9800 查找落球
-      console.log(`[連續執行] 緊接著前往 9800 查找落球進行替換...`);
+      // 3. 不要停！緊接著查找落球×5
+      console.log(`[連續執行] 緊接著前往 9800 查找落球...`);
       const dropBalls = await fetch9800Drop(targetDate);
       if (dropBalls) {
-        // 5. 替換首列的號碼為落球
+        // 4. 落球 OK 就替換首列
         localData[0][1] = dropBalls;
-        // 6. 【再次立刻寫入 7788.js】完成替換！
-        saveData(localData);
-        console.log(`[落球替換] 成功！已將 7788.js 首列替換為落球並儲存`);
+        saveData(localData); // 【再次立刻寫入 7788.js】
+        console.log(`[落球替換] 落球 OK，已將首列替換為落球並儲存！`);
       } else {
         console.log(`[提示] 9800 目前尚無落球，首列暫時保持順球，留待後續巡邏更新。`);
       }
@@ -178,7 +175,6 @@ async function fetchAll9800Drops(fromDate, toDate) {
     });
     const html = await res.text();
     let results = [];
-    
     const regex = /(\d{4}-\d{2}-\d{2})[\s\S]*?週[^>]*?>\s*([\d\s]+?)\s*</g;
     let match;
     while ((match = regex.exec(html)) !== null) {
@@ -196,10 +192,12 @@ async function fetchAll9800Drops(fromDate, toDate) {
   }
 }
 
-// 【嚴格格式化儲存】確保無多餘空格與換行，完美輸出單行資料
+// 【精準格式化儲存】嚴格符合你的 ['2026-10-28',['35','13','11','19','06']], 格式
 function saveData(data) {
-  // 將陣列轉換成格式化的單行字串
-  const rows = data.map(item => `['${item[0]}',${JSON.stringify(item[1])}]`);
+  const rows = data.map(item => {
+    const ballStr = item[1].map(b => `'${b}'`).join(',');
+    return `  ['${item[0]}',[${ballStr}]]`;
+  });
   const finalContent = `var 7788 = [\n${rows.join(',\n')}\n];`;
   fs.writeFileSync('7788.js', finalContent, 'utf8');
 }
