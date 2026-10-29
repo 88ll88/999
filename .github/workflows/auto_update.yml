@@ -1,32 +1,38 @@
-name: 539 Auto Update
+name: 539 彩券資料自動巡邏更新
 
 on:
   schedule:
-    - cron: '40 12 * * 1-6' # 台灣 20:40
-    - cron: '50 12 * * 1-6' # 台灣 20:50
-    - cron: '00 13 * * 1-6' # 台灣 21:00
-    - cron: '30 13 * * 1-6' # 台灣 21:30
-    - cron: '00 14 * * 1-6' # 台灣 22:00
-  workflow_dispatch:
+    # 提示：GitHub Actions 走的是 UTC 時間，台北時間需減 8 小時
+    - cron: '40 12 * * *'  # 台北時間 20:40 (搶先更新順球)
+    - cron: '50 12 * * *'  # 台北時間 20:50 (順球備用補抓)
+    - cron: '00 13 * * *'  # 台北時間 21:00 (落球更替時段)
+    - cron: '30 13 * * *'  # 台北時間 21:30 (落球備用更替)
+    - cron: '00 14 * * *'  # 台北時間 22:00 (落球最終保險)
+  workflow_dispatch:       # 支援手動點擊執行測試
 
 jobs:
-  update-lotto:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: 檢查專案原始碼
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: 安裝最新 Node.js 環境
-        uses: actions/setup-node@v4
+      - name: 配置 Node.js 環境
+        uses: actions/setup-node@v3
         with:
-          node-version: 20
+          node-version: '20'
 
-      - name: 執行更新腳本
+      - name: 執行更新指令
         run: node update.js
 
-      - name: 將最新資料提交回 GitHub 倉庫
+      - name: 檢查檔案是否變更並自動提交回 GitHub
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add 7788.js
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto updated 539" && git push)
+          if ! git diff --cached --quiet; then
+            git commit -m "自動更新開獎數據: $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          else
+            echo "資料已是最新，本次無資料異動。"
+          fi
