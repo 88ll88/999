@@ -4,14 +4,12 @@ const https = require('https');
 
 const filePath = path.join(__dirname, '7788.js');
 
-// 取得台灣時間 (UTC+8)
 function getTaiwanTime() {
     const now = new Date();
     const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
     return new Date(utc + (3600000 * 8));
 }
 
-// 格式化日期為 YYYY-MM-DD
 function formatDate(date) {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -19,7 +17,6 @@ function formatDate(date) {
     return `${year}-${month}-${day}`;
 }
 
-// 依據時間與週日判斷已開獎日期
 function getTargetDrawDate() {
     const tw = getTaiwanTime();
     const hours = tw.getHours();
@@ -27,19 +24,15 @@ function getTargetDrawDate() {
     const timeVal = hours * 100 + minutes;
 
     let target = new Date(tw);
-    // 00:00 至 20:40 算昨天的開獎
     if (timeVal >= 0 && timeVal <= 2040) {
         target.setDate(target.getDate() - 1);
     }
-    // 周日休息不開獎，自動再往前推一天
     if (target.getDay() === 0) {
         target.setDate(target.getDate() - 1);
     }
-
     return formatDate(target);
 }
 
-// 使用原生 https 抓取 Yahoo 網頁內容 (加上 User-Agent 模擬瀏覽器)
 function fetchYahooUrl(url) {
     return new Promise((resolve, reject) => {
         const options = {
@@ -55,10 +48,20 @@ function fetchYahooUrl(url) {
     });
 }
 
-// 從 Yahoo 新聞搜尋結果解析落球或順球資料
+// 從 Yahoo 新聞 HTML 中精準抓取今彩539號碼
 function parseYahooBalls(html, targetDate) {
-    // 這裡預留從 Yahoo 新聞 HTML 中擷取當日 539 號碼的邏輯
-    // 格式範例：{ date: targetDate, balls: ['35', '13', '11', '19', '06'] }
+    // 尋找包含「今彩539」與號碼的文字區段
+    // 範例格式如畫面上的：今彩539：03、07、14、17、27
+    const regex = /今彩539\s*[:：]\s*([0-9、]+)/;
+    const match = html.match(regex);
+    
+    if (match && match[1]) {
+        // 將「03、07、14」切切割成陣列 ['03', '07', '14', '17', '27']
+        const balls = match[1].split('、').map(b => b.trim()).filter(b => b.length > 0);
+        if (balls.length === 5) {
+            return { date: targetDate, balls: balls };
+        }
+    }
     return null;
 }
 
@@ -72,7 +75,6 @@ async function main() {
     const targetDateStr = getTargetDrawDate();
     console.log(`計算出的目標已開獎日期為: ${targetDateStr}`);
 
-    // 讀取 7788.js 首列日期
     const match = fileContent.match(/\[\s*'(\d{4}-\d{2}-\d{2})',\s*\[(.*?)\]\s*\]/);
     if (!match) {
         console.error('無法解析 7788.js 首列格式');
@@ -81,19 +83,17 @@ async function main() {
     const firstRowDate = match[1];
     console.log(`7788.js 首列日期為: ${firstRowDate}`);
 
-    // Yahoo 新聞搜尋網址 (以 539 開獎號碼為關鍵字)
-    const yahooSearchUrl = `https://tw.search.yahoo.com/search?p=539+開獎號碼+${targetDateStr}`;
+    // Yahoo 新聞搜尋或相關報導網址
+    const yahooUrl = `https://tw.search.yahoo.com/search?p=威力彩開獎號碼+今彩539+${targetDateStr}`;
 
     if (firstRowDate === targetDateStr) {
         console.log('首列已是最新日期，檢查是否需將順球替換為落球...');
         
-        // 21:00 以後檢查並將首列順球替換為落球
         const tw = getTaiwanTime();
         const currentHourMin = tw.getHours() * 100 + tw.getMinutes();
         if (currentHourMin >= 2100) {
             try {
-                console.log('正在從 Yahoo 新聞搜尋當日落球...');
-                const html = await fetchYahooUrl(yahooSearchUrl);
+                const html = await fetchYahooUrl(yahooUrl);
                 const luoQiuData = parseYahooBalls(html, targetDateStr);
                 if (luoQiuData && luoQiuData.balls.length === 5) {
                     const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
@@ -101,11 +101,11 @@ async function main() {
                     if (fileContent.match(targetRowRegex)) {
                         fileContent = fileContent.replace(targetRowRegex, newRow);
                         fs.writeFileSync(filePath, fileContent, 'utf8');
-                        console.log(`成功從 Yahoo 新聞將 ${targetDateStr} 順球替換為落球`);
+                        console.log(`成功從 Yahoo 將 ${targetDateStr} 順球替換為落球`);
                     }
                 }
             } catch (err) {
-                console.error('從 Yahoo 更新落球失敗:', err.message);
+                console.error('更新落球失敗:', err.message);
             }
         }
         return;
@@ -116,18 +116,20 @@ async function main() {
     const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
 
     if (diffDays >= 1) {
-        console.log('開始從 Yahoo 新聞搜尋並抓取號碼...');
+        console.log('開始從 Yahoo 抓取開獎號碼...');
         try {
-            const html = await fetchYahooUrl(yahooSearchUrl);
+            const html = await fetchYahooUrl(yahooUrl);
             const yahooData = parseYahooBalls(html, targetDateStr);
             if (yahooData && yahooData.balls.length === 5) {
                 const newRow = `['${yahooData.date}',['${yahooData.balls.join("','")}']],\n`;
                 fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
                 fs.writeFileSync(filePath, fileContent, 'utf8');
-                console.log(`成功從 Yahoo 新聞插入 ${yahooData.date} 資料`);
+                console.log(`成功從 Yahoo 插入 ${yahooData.date} 資料`);
+            } else {
+                console.log('尚未在 Yahoo 抓到完整的 5 顆號碼');
             }
         } catch (err) {
-            console.error('從 Yahoo 抓取資料失敗:', err.message);
+            console.error('抓取失敗:', err.message);
         }
     }
 }
