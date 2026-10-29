@@ -2,16 +2,11 @@ name: 539 Auto Update
 
 on:
   schedule:
-    # 這裡的 Cron 排程時間已轉換為台灣時間：
-    # 12:40 UTC = 20:40 台灣時間
-    # 13:00 UTC = 21:00 台灣時間
-    # 13:30 UTC = 21:30 台灣時間
-    # 14:00 UTC = 22:00 台灣時間
     - cron: '40 12 * * 1-6'
     - cron: '00 13 * * 1-6'
     - cron: '30 13 * * 1-6'
     - cron: '00 14 * * 1-6'
-  workflow_dispatch: # 保留手動點擊執行按鈕
+  workflow_dispatch:
 
 jobs:
   update-lotto:
@@ -20,10 +15,10 @@ jobs:
       - name: 檢查專案原始碼
         uses: actions/checkout@v4
 
-      - name: 安裝 Node.js 環境
+      - name: 安裝最新 Node.js 環境
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20 # 這裡強制改成最新穩定的 v20，徹底解決錯誤！
 
       - name: 安裝網頁爬蟲套件
         run: npm install axios cheerio
