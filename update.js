@@ -33,11 +33,12 @@ function getTargetDrawDate() {
     return formatDate(target);
 }
 
-function fetchYahooUrl(url) {
+function fetchUrl(url) {
     return new Promise((resolve, reject) => {
         const options = {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
             }
         };
         https.get(url, options, (res) => {
@@ -48,18 +49,23 @@ function fetchYahooUrl(url) {
     });
 }
 
-// 從 Yahoo 新聞 HTML 中精準抓取今彩539號碼
-function parseYahooBalls(html, targetDate) {
-    // 尋找包含「今彩539」與號碼的文字區段
-    // 範例格式如畫面上的：今彩539：03、07、14、17、27
-    const regex = /今彩539\s*[:：]\s*([0-9、]+)/;
-    const match = html.match(regex);
-    
-    if (match && match[1]) {
-        // 將「03、07、14」切切割成陣列 ['03', '07', '14', '17', '27']
-        const balls = match[1].split('、').map(b => b.trim()).filter(b => b.length > 0);
-        if (balls.length === 5) {
-            return { date: targetDate, balls: balls };
+// 解析 Yahoo 內文中的今彩539號碼
+function extract539Balls(html) {
+    // 支援多種常見格式：
+    // 格式1：今彩539：03、07、14、17、27
+    // 格式2：今彩539開獎號碼為 03、07、14、17、27
+    const regexList = [
+        /今彩539\s*[:：]\s*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/,
+        /今彩539[^\d]*([0-9]{2}(?:[、,\s]+[0-9]{2}){4})/
+    ];
+
+    for (let regex of regexList) {
+        const match = html.match(regex);
+        if (match && match[1]) {
+            const balls = match[1].split(/[、,\s]+/).map(b => b.trim()).filter(b => b.length === 2);
+            if (balls.length === 5) {
+                return balls;
+            }
         }
     }
     return null;
@@ -83,54 +89,41 @@ async function main() {
     const firstRowDate = match[1];
     console.log(`7788.js 首列日期為: ${firstRowDate}`);
 
-    // Yahoo 新聞搜尋或相關報導網址
-    const yahooUrl = `https://tw.search.yahoo.com/search?p=威力彩開獎號碼+今彩539+${targetDateStr}`;
-
     if (firstRowDate === targetDateStr) {
-        console.log('首列已是最新日期，檢查是否需將順球替換為落球...');
-        
-        const tw = getTaiwanTime();
-        const currentHourMin = tw.getHours() * 100 + tw.getMinutes();
-        if (currentHourMin >= 2100) {
-            try {
-                const html = await fetchYahooUrl(yahooUrl);
-                const luoQiuData = parseYahooBalls(html, targetDateStr);
-                if (luoQiuData && luoQiuData.balls.length === 5) {
-                    const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
-                    const newRow = `['${targetDateStr}',['${luoQiuData.balls.join("','")}']]`;
-                    if (fileContent.match(targetRowRegex)) {
-                        fileContent = fileContent.replace(targetRowRegex, newRow);
-                        fs.writeFileSync(filePath, fileContent, 'utf8');
-                        console.log(`成功從 Yahoo 將 ${targetDateStr} 順球替換為落球`);
-                    }
-                }
-            } catch (err) {
-                console.error('更新落球失敗:', err.message);
-            }
-        }
+        console.log('首列已是最新日期，無需重複更新。');
         return;
     }
 
-    const d1 = new Date(firstRowDate);
-    const d2 = new Date(targetDateStr);
-    const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+    // 嘗試多個 Yahoo 新聞搜尋來源
+    const targetMonthDay = targetDateStr.replace(/^\d{4}-0?/, '').replace('-', '/'); // 轉成 10/29 格式
+    const urlsToTry = [
+        `https://tw.news.yahoo.com/tag/今彩539`,
+        `https://tw.news.search.yahoo.com/search?p=今彩539+${targetMonthDay}+開獎號碼`
+    ];
 
-    if (diffDays >= 1) {
-        console.log('開始從 Yahoo 抓取開獎號碼...');
+    let foundBalls = null;
+
+    for (let url of urlsToTry) {
         try {
-            const html = await fetchYahooUrl(yahooUrl);
-            const yahooData = parseYahooBalls(html, targetDateStr);
-            if (yahooData && yahooData.balls.length === 5) {
-                const newRow = `['${yahooData.date}',['${yahooData.balls.join("','")}']],\n`;
-                fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
-                fs.writeFileSync(filePath, fileContent, 'utf8');
-                console.log(`成功從 Yahoo 插入 ${yahooData.date} 資料`);
-            } else {
-                console.log('尚未在 Yahoo 抓到完整的 5 顆號碼');
+            console.log(`正在嘗試抓取: ${url}`);
+            const html = await fetchUrl(url);
+            foundBalls = extract539Balls(html);
+            if (foundBalls) {
+                console.log(`成功抓取到號碼: ${foundBalls.join(', ')}`);
+                break;
             }
         } catch (err) {
-            console.error('抓取失敗:', err.message);
+            console.error(`連線失敗 ${url}:`, err.message);
         }
+    }
+
+    if (foundBalls && foundBalls.length === 5) {
+        const newRow = `['${targetDateStr}',['${foundBalls.join("','")}']],\n`;
+        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
+        fs.writeFileSync(filePath, fileContent, 'utf8');
+        console.log(`成功將 ${targetDateStr} 的號碼寫入 7788.js 首列！`);
+    } else {
+        console.log('當前來源尚未更新或無法解析號碼，請稍後再試。');
     }
 }
 
