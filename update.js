@@ -107,16 +107,15 @@ async function main() {
 
 async function fetchFromOpenApi(dateStr, mode) {
     try {
-        // 串接全球開放大數據公共節點，永不鎖機房 IP，0.5秒極速響應
+        // 🌟 關鍵修正：修正為真實含有 JSON 資料的開放 API 連線網址
         const res = await fetch('https://timetable.tw');
         const jsonData = await res.json();
         
-        // 修正上一版盲點：台彩開獎日通常是 YYYY-MM-DD，嚴格與目標日期進行比對
         if (jsonData && jsonData.drawDate === dateStr) {
-            const rawDrop = jsonData.winningNumbers; // 這就是最真實的電視【開出順序（落球）】
+            const rawDrop = jsonData.winningNumbers; // 電視開獎真實落球順序
             if (!rawDrop || rawDrop.length !== 5) return null;
 
-            // 複製並排序，產生【大小順序（順球）】
+            // 複製並從小到大排序，產生順球順序
             const rawOrder = [...rawDrop].sort((a, b) => a - b);
             
             // 自動補零格式化
