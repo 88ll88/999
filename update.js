@@ -1,17 +1,15 @@
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
-const cheerio = require('cheerio');
+const https = require('https');
 
 // 設定目標檔案路徑
 const filePath = path.join(__dirname, '7788.js');
 
-// 取得台灣時間 (UTC+8) 的當前日期與時間
+// 取得台灣時間 (UTC+8)
 function getTaiwanTime() {
     const now = new Date();
     const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const twTime = new Date(utc + (3600000 * 8));
-    return twTime;
+    return new Date(utc + (3600000 * 8));
 }
 
 // 格式化日期為 YYYY-MM-DD
@@ -22,53 +20,35 @@ function formatDate(date) {
     return `${year}-${month}-${day}`;
 }
 
-// 取得已開獎日期（根據時間點判斷）
+// 取得目標開獎日期
 function getTargetDrawDate() {
     const tw = getTaiwanTime();
     const hours = tw.getHours();
     const minutes = tw.getMinutes();
-    const currentTimeVal = hours * 100 + minutes;
+    const timeVal = hours * 100 + minutes;
 
-    let targetDate = new Date(tw);
-    if (currentTimeVal >= 0 && currentTimeVal <= 2040) {
-        targetDate.setDate(targetDate.getDate() - 1);
+    let target = new Date(tw);
+    if (timeVal >= 0 && timeVal <= 2040) {
+        target.setDate(target.getDate() - 1);
     }
     
-    // 檢查是否為週日（週日休息不開獎）
-    if (targetDate.getDay() === 0) {
-        targetDate.setDate(targetDate.getDate() - 1);
+    // 若碰到週日，自動再往前推一天（週日休息）
+    if (target.getDay() === 0) {
+        target.setDate(target.getDate() - 1);
     }
 
-    return formatDate(targetDate);
+    return formatDate(target);
 }
 
-// 抓取 9800.com.tw 順球
-async function fetchShunQiu(targetDate) {
-    try {
-        const url = 'https://www.taiwanlottery.com/lotto/result/daily_cash';
-        const response = await axios.get(url);
-        const $ = cheerio.load(response.data);
-        let balls = [];
-        return balls;
-    } catch (error) {
-        console.error('抓取順球失敗:', error.message);
-        return null;
-    }
-}
-
-// 抓取 9800.com.tw/lotto539/drop.html 落球
-async function fetchLuoQiu(targetDate) {
-    try {
-        const url = 'https://9800.com.tw/lotto539/drop.html';
-        const response = await axios.get(url);
-        const $ = cheerio.load(response.data);
-        let foundDate = '';
-        let balls = [];
-        return { date: foundDate, balls: balls };
-    } catch (error) {
-        console.error('抓取落球失敗:', error.message);
-        return null;
-    }
+// 使用原生 https 抓取網頁內容
+function fetchUrl(url) {
+    return new Promise((resolve, reject) => {
+        https.get(url, (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => { resolve(data); });
+        }).on('error', (err) => { reject(err); });
+    });
 }
 
 async function main() {
@@ -81,6 +61,7 @@ async function main() {
     const targetDateStr = getTargetDrawDate();
     console.log(`計算出的目標已開獎日期為: ${targetDateStr}`);
 
+    // 比對首列日期
     const match = fileContent.match(/\[\s*'(\d{4}-\d{2}-\d{2})',\s*\[(.*?)\]\s*\]/);
     if (!match) {
         console.error('無法解析 7788.js 首列格式');
@@ -99,37 +80,21 @@ async function main() {
     const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
 
     if (diffDays > 1) {
-        console.log('需更新 2 期以上，從 drop.html 抓取落球...');
-        const result = await fetchLuoQiu(targetDateStr);
-        if (result && result.balls.length > 0) {
-            const newRow = `['${result.date}',['${result.balls.join("','")}']],\n`;
-            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
-            fs.writeFileSync(filePath, fileContent, 'utf8');
-            console.log(`成功補上 ${result.date} 落球資料`);
+        console.log('需更新 2 期以上，檢查落球網頁...');
+        try {
+            const html = await fetchUrl('https://9800.com.tw/lotto539/drop.html');
+            // 這裡可以根據需要解析網頁號碼
+            console.log('成功讀取落球網頁');
+        } catch (error) {
+            console.error('讀取落球網頁失敗:', error.message);
         }
     } else if (diffDays === 1) {
-        console.log('需更新 1 期，先抓取順球...');
-        const shunQiuBalls = await fetchShunQiu(targetDateStr);
-        if (shunQiuBalls && shunQiuBalls.length > 0) {
-            const newRow = `['${targetDateStr}',['${shunQiuBalls.join("','")}']],\n`;
-            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
-            fs.writeFileSync(filePath, fileContent, 'utf8');
-            console.log(`已暫時插入 ${targetDateStr} 順球資料`);
-        }
-    }
-
-    const tw = getTaiwanTime();
-    if (tw.getHours() >= 21) {
-        console.log('時間已過 21:00，開始檢查並替換為落球...');
-        const dropResult = await fetchLuoQiu(targetDateStr);
-        if (dropResult && dropResult.balls.length > 0) {
-            const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
-            const correctedRow = `['${targetDateStr}',['${dropResult.balls.join("','")}']]`;
-            if (fileContent.match(targetRowRegex)) {
-                fileContent = fileContent.replace(targetRowRegex, correctedRow);
-                fs.writeFileSync(filePath, fileContent, 'utf8');
-                console.log(`成功將 ${targetDateStr} 順球替換為落球`);
-            }
+        console.log('需更新 1 期，檢查順球網頁...');
+        try {
+            const html = await fetchUrl('https://www.taiwanlottery.com/lotto/result/daily_cash');
+            console.log('成功讀取順球網頁');
+        } catch (error) {
+            console.error('讀取順球網頁失敗:', error.message);
         }
     }
 }
