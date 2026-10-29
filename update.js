@@ -1,7 +1,9 @@
 const fs = require('fs');
 
 async function main() {
-    // 1. 取得台灣時間與已開獎日期
+    console.log(`[${new Date().toISOString()}] 開始執行 539 自動更新`);
+
+    // 1. 計算當前台灣時間與開獎基準日期（20:40 切分邊界）
     const now = new Date();
     const twTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
     const hours = twTime.getUTCHours();
@@ -9,21 +11,19 @@ async function main() {
     const currentMinutes = (hours * 60) + minutes;
 
     let calcDate = new Date(twTime);
-    // 時間是 00:00 至 20:40，則已開獎日期就是昨天
     if (currentMinutes < (20 * 60 + 40)) {
-        calcDate.setDate(calcDate.getDate() - 1);
+        calcDate.setDate(calcDate.getDate() - 1); // 20:40 前算昨天的
     }
-    // 遇週日再往前推一天（週日休息）
     if (calcDate.getUTCDay() === 0) {
-        calcDate.setDate(calcDate.getDate() - 1);
+        calcDate.setDate(calcDate.getDate() - 1); // 週日休息
     }
 
     const yyyy = calcDate.getUTCFullYear();
     const mm = String(calcDate.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(calcDate.getUTCDate()).padStart(2, '0');
-    const targetDate = `${yyyy}-${mm}-${dd}`; // 這是已開獎日期（如 2026-10-29）
+    const targetDate = `${yyyy}-${mm}-${dd}`; 
 
-    // 2. 讀取本地 7788.js
+    // 2. 讀取與解析 7788.js 首列
     let content = '';
     try {
         content = fs.readFileSync('./7788.js', 'utf8');
@@ -31,41 +31,38 @@ async function main() {
         process.exit(1);
     }
 
-    // 抓取現有 7788.js 首列日期
     const firstRowMatch = content.match(/\[\s*'(\d{4}-\d{2}-\d{2})'\s*,\s*\[/);
     if (!firstRowMatch) process.exit(1);
     const topDateStr = firstRowMatch[1];
 
     console.log(`[系統通知] 預計已開獎日期: ${targetDate}, 檔案目前首列日期: ${topDateStr}`);
 
-    // ==========================================
-    // 狀況 3：首列日期已等於今日基準日 -> 執行落球完全覆蓋
-    // ==========================================
+    // 【步驟 3 邏輯】：首列日期已等於今天，且到 21:00 執行落球覆蓋
     if (topDateStr === targetDate) {
-        if (currentMinutes >= (21 * 60)) { // 21:00 之後排程觸發
-            console.log("今日首列已存在（順球），進入 21:00 落球完全覆蓋替換階段...");
-            const balls = await fetchFrom9800(targetDate, 'luo');
+        if (currentMinutes >= (21 * 60)) {
+            console.log("今日首列已存在，進入 21:00 落球完全覆蓋替換階段...");
+            const balls = await fetchFrom9800Web(targetDate, 'luo');
             if (balls) {
                 const targetDropRow = `['${targetDate}',['${balls.join("','")}']],`;
                 const firstRowRegex = /(\[\s*'(\d{4}-\d{2}-\d{2})'\s*,\s*\[[\s\S]*?\]\s*\]\s*,)/;
                 const matchRow = content.match(firstRowRegex);
                 if (matchRow) {
                     if (matchRow[1].replace(/\s/g, '') === targetDropRow.replace(/\s/g, '')) {
-                        console.log("今日首列【落球】已是最新且完全一致，安全退出。");
+                        console.log("今日首列【落球】已是最新狀態，安全退出。");
                         return;
                     }
                     let newContent = content.replace(matchRow[1], targetDropRow);
                     fs.writeFileSync('./7788.js', newContent, 'utf8');
-                    console.log("落球完全覆蓋替換成功！");
+                    console.log("今日落球成功覆蓋替換！");
                 }
             }
         } else {
-            console.log("今天順球已更新成功，尚未到 21:00 落球更替時間。");
+            console.log("今天順球已更新，尚未到 21:00 落球更替時間。");
         }
         return;
     }
 
-    // 計算落後幾期
+    // 計算相差天數判定狀況
     function getDaysDiff(d1, d2) {
         const date1 = new Date(d1 + "T00:00:00+08:00");
         const date2 = new Date(d2 + "T00:00:00+08:00");
@@ -75,62 +72,56 @@ async function main() {
     let dateToUpdate = "";
     let mode = "luo";
 
-    // ==========================================
-    // 狀況 1 與 2：判定補課或新期更新
-    // ==========================================
     if (getDaysDiff(topDateStr, targetDate) >= 2 || (topDateStr < targetDate && getDaysDiff(topDateStr, targetDate) === 2 && new Date(targetDate + "T00:00:00+08:00").getDay() === 1)) {
+        // 【步驟 1 邏輯】：落後多期，強追歷史落球補課
         let d = new Date(topDateStr + "T00:00:00+08:00");
         d.setDate(d.getDate() + 1);
         if (d.getDay() === 0) d.setDate(d.getDate() + 1);
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        dateToUpdate = `${y}-${m}-${day}`;
+        dateToUpdate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         mode = "luo";
-        console.log(`[步驟 1 觸發] 需更新 2 期以上，自動補齊歷史落球日期: ${dateToUpdate}`);
+        console.log(`[步驟 1] 自動補齊歷史落球，目標日期: ${dateToUpdate}`);
     } else {
+        // 【步驟 2 邏輯】：落後 1 期更新
         dateToUpdate = targetDate;
         mode = currentMinutes < (21 * 60) ? "shun" : "luo";
-        console.log(`[步驟 2 觸發] 需更新 1 期，日期: ${dateToUpdate}，優先模式: ${mode}`);
+        console.log(`[步驟 2] 更新今日新期，目標日期: ${dateToUpdate}，模式: ${mode}`);
     }
 
-    const balls = await fetchFrom9800(dateToUpdate, mode);
+    const balls = await fetchFrom9800Web(dateToUpdate, mode);
     if (!balls) {
-        console.log("樂透堂網頁數據尚未就緒或日期尚未同步，放棄寫入。");
+        console.log("9800 網頁號碼尚未就緒或比對失敗，放棄寫入。");
         return;
     }
 
-    // 嚴格落實：不得有空格緊密緊湊格式
+    // 嚴格遵守無空格緊密結構
     const newRowStr = `['${dateToUpdate}',['${balls.join("','")}']],`;
     let newContent = content.replace(/(var\s+7788\s*=\s*\[\s*\n?)/, `$1${newRowStr}\n`);
     fs.writeFileSync('./7788.js', newContent, 'utf8');
     console.log(`[成功] 緊密資料已成功置入首列: ${newRowStr}`);
 }
 
-async function fetchFrom9800(dateStr, mode) {
+async function fetchFrom9800Web(dateStr, mode) {
     try {
-        // 🌟 正宗網頁純文字下載，補上偽裝頭，絕對不碰會崩潰的 .json()
+        // 100% 直連 9800 樂透堂網頁純文字
         const res = await fetch('https://9800.com.tw', {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+            headers: { 'User-Agent': 'Mozilla/5.0' }
         });
-        
-        // 關鍵核心：用 .text() 讀取最純粹的網頁純文字，100% 避開 JSON 報錯
-        const text = await res.text();
+        const html = await res.text();
 
-        const dateIdx = text.indexOf(dateStr);
+        const dateIdx = html.indexOf(dateStr);
         if (dateIdx === -1) return null;
 
-        // 向下切出包含號碼的特徵 HTML 區塊
-        const subText = text.substring(dateIdx, dateIdx + 600);
-        
-        // 抓出標準雙位數球號
-        const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+        // 切出關鍵文字區塊
+        const subText = html.substring(dateIdx, dateIdx + 500);
+
+        // 🌟 核心修正：改用精準匹配彩球數字的正則，徹底解決 &nbsp; 導致看漏球號的漏洞！
+        const matches = subText.match(/(0[1-9]|[12][0-9]|3[0-9])/g);
         if (!matches) return null;
 
         const [y, m, d] = dateStr.split('-');
         let validNums = [];
         for (let num of matches) {
-            // 排除年月日雜訊干擾
+            // 排除了與日期年月日重複的數字干擾
             if (num !== m && num !== d && num !== y.slice(-2)) {
                 validNums.push(num);
             }
@@ -138,11 +129,11 @@ async function fetchFrom9800(dateStr, mode) {
 
         if (validNums.length >= 10) {
             const cleanSet = validNums.slice(0, 10);
-            // 前 5 顆是落球，後 5 顆是順球
+            // 第四欄（落球）取前面 5 顆，第五欄（順球）取後面 5 顆
             return mode === 'shun' ? cleanSet.slice(-5) : cleanSet.slice(0, 5);
         }
     } catch (e) {
-        console.error('專屬通道網頁讀取異常:', e.message);
+        console.error('9800 網頁讀取異常:', e.message);
     }
     return null;
 }
