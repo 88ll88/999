@@ -1,125 +1,138 @@
 const fs = require('fs');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
-const mode = process.argv[2] || 'luo';
+// 設定目標網頁
+const LOTTO_URL = "https://9800.com.tw";
+const JS_FILE_PATH = "./7788.js"; // 讀寫本地倉庫中的 7788.js
 
-async function main() {
-    console.log(`[${new Date().toISOString()}] 開始執行更新，模式: ${mode}`);
-
-    let content = '';
-    try {
-        content = fs.readFileSync('./7788.js', 'utf8');
-    } catch (e) {
-        console.error('無法讀取 7788.js:', e.message);
-        process.exit(1);
-    }
-
-    const match = content.match(/var\s+7788\s*=\s*(\[[\s\S]*\]);?/);
-    if (!match) {
-        console.error('7788.js 格式解析失敗');
-        process.exit(1);
-    }
-
-    let records = eval('(' + match[1] + ')');
-    let topDateStr = records[0][0];
-
-    let targetDate = topDateStr;
-    if (!records[0][1].includes('00') && !records[0][1].includes('NaN')) {
-        targetDate = getNextDrawDate(topDateStr);
-    }
-
-    console.log(`現有最新日期: ${topDateStr}，目標更新日期: ${targetDate}`);
-
-    let balls = null;
-    if (mode === 'shun') {
-        balls = await fetchShunQiu(targetDate);
-    } else {
-        balls = await fetchLuoQiu(targetDate);
-    }
-
-    if (!balls || balls.length !== 5) {
-        console.log(`[${targetDate}] 尚未取得正確的 5 個號碼。`);
-        return;
-    }
-
-    console.log(`成功取得正確號碼: [${balls.join(',')}]`);
-
-    const idx = records.findIndex(r => r[0] === targetDate);
-    if (idx !== -1) {
-        records[idx] = [targetDate, balls];
-    } else {
-        records.unshift([targetDate, balls]);
-    }
-
-    let rows = records.map(r => `['${r[0]}',['${r[1].join("','")}']]`).join(',\n');
-    let newContent = `var 7788 = [\n${rows}\n];\n`;
-
-    fs.writeFileSync('./7788.js', newContent, 'utf8');
-    console.log('7788.js 檔案更新完成！');
-}
-
-function getNextDrawDate(dateStr) {
+// 日期工具：加 N 天 (回傳 YYYY-MM-DD)
+function addDays(dateStr, days) {
     let d = new Date(dateStr);
-    d.setDate(d.getDate() + 1);
-    if (d.getDay() === 0) d.setDate(d.getDate() + 1);
-    let yyyy = d.getFullYear();
-    let mm = String(d.getMonth() + 1).padStart(2, '0');
-    let dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split('T')[0];
 }
 
-async function fetchShunQiu(targetDate) {
-    try {
-        const res = await fetch('https://www.pilio.idv.tw/lto539/');
-        const text = await res.text();
-        return extractStrictBalls(text, targetDate);
-    } catch (e) {}
-    return null;
+// 獲取今天的台灣時間日期 (格式為 YYYY-MM-DD)
+function getTaiwanTodayStr() {
+    const options = { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' };
+    const formatter = new Intl.DateTimeFormat('zh-TW', options);
+    const parts = formatter.formatToParts(new Date());
+    const year = parts.find(p => p.type === 'year').value;
+    const month = parts.find(p => p.type === 'month').value;
+    const day = parts.find(p => p.type === 'day').value;
+    return `${year}-${month}-${day}`;
 }
 
-async function fetchLuoQiu(targetDate) {
-    // 優先改抓 9800 的落球頁面，並用更嚴格的陣列篩選
-    try {
-        const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
-        const text = await res.text();
-        const balls = extractStrictBalls(text, targetDate);
-        if (balls) return balls;
-    } catch (e) {}
-
-    try {
-        const res = await fetch('https://www.taiwanlottery.com/lotto/result/daily_cash');
-        const text = await res.text();
-        const balls = extractStrictBalls(text, targetDate);
-        if (balls) return balls;
-    } catch (e) {}
-
-    return null;
+// 檢查是否為週日
+function isSunday(dateStr) {
+    return new Date(dateStr).getDay() === 0;
 }
 
-// 嚴格過濾：只抓介於 '01' 到 '39' 之間、且不重複的雙位數
-function extractStrictBalls(htmlText, dateStr) {
-    const dateIdx = htmlText.indexOf(dateStr);
-    if (dateIdx === -1) return null;
+async function run() {
+    try {
+        const todayStr = getTaiwanTodayStr();
+        console.log(`[系統通知] 當前台灣日期：${todayStr}`);
 
-    // 只取日期後面 300 個字元（避免掃到其他不相干的表格）
-    const subText = htmlText.substring(dateIdx, dateIdx + 300);
-    const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[9])\b/g);
-    
-    if (!matches) return null;
-
-    let validBalls = [];
-    const [y, m, d] = dateStr.split(/[-/]/);
-
-    for (let num of matches) {
-        // 排除剛好等於年、月、日的數字，避免誤抓日期
-        if (num !== m && num !== d && num !== y.slice(-2)) {
-            if (!validBalls.includes(num)) {
-                validBalls.push(num);
-            }
+        // 讀取本地目前的 7788.js 內容
+        if (!fs.existsSync(JS_FILE_PATH)) {
+            console.error("錯誤：找不到 7788.js 檔案！");
+            return;
         }
-        if (validBalls.length === 5) break;
-    }
+        let jsContent = fs.readFileSync(JS_FILE_PATH, 'utf-8');
 
-    return validBalls.length === 5 ? validBalls : null;
+        // 正則表達式抓取首列：['日期',['球','球','球','球','球']]
+        const rowRegex = /\[\s*'(\d{4}-\d{2}-\d{2})'\s*,\s*\[\s*'(\d{2})'\s*,\s*'(\d{2})'\s*,\s*'(\d{2})'\s*,\s*'(\d{2})'\s*,\s*'(\d{2})'\s*\]\s*\]/;
+        const match = jsContent.match(rowRegex);
+        if (!match) {
+            console.error("錯誤：7788.js 格式不相符，無法解析首列日期！");
+            return;
+        }
+
+        const latestDateInJs = match[1];
+        const firstRowString = match[0]; // 完整的首列字串內容
+        console.log(`[步驟驗證] 7788.js 目前首列最新日期是：${latestDateInJs}`);
+
+        // 計算下一期應該開獎的日期
+        let nextTargetDate = addDays(latestDateInJs, 1);
+        if (isSunday(nextTargetDate)) {
+            nextTargetDate = addDays(nextTargetDate, 1); // 週日休息，再加一天
+        }
+
+        // 爬取樂透堂網頁
+        console.log("正在抓取樂透堂最新網頁資料...");
+        const response = await axios.get(LOTTO_URL, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const $ = cheerio.load(response.data);
+
+        // 尋找網頁表格中符合 nextTargetDate 這一天的列
+        let targetTr = null;
+        $('table tr').each((i, row) => {
+            if ($(row).text().includes(nextTargetDate)) {
+                targetTr = row;
+            }
+        });
+
+        if (!targetTr) {
+            console.log(`[通知] 樂透堂網頁上目前還找不到 ${nextTargetDate} 的資料，今日提早結束。`);
+            return;
+        }
+
+        // 解析開獎資料
+        const tds = $(targetTr).find('td');
+        // 假設欄位順序：期次(0)、開獎日期(1)、週幾(2)、落球序(3)、順序排序(4)
+        const rawDrop = $(tds.get(3)).text().trim().split(/\s+/);
+        const rawOrder = $(tds.get(4)).text().trim().split(/\s+/);
+
+        if (rawOrder.length !== 5) {
+            console.error(`[異常] 查找到 ${nextTargetDate} 的號碼數量不等於 5 顆，網頁結構可能異常。`);
+            return;
+        }
+
+        // 格式化為沒有多餘空格的精簡陣列： ['06','11','13','19','35']
+        const dropBallsStr = `[${rawDrop.map(n => `'${n}'`).join(',')}]`;
+        const orderBallsStr = `[${rawOrder.map(n => `'${n}'`).join(',')}]`;
+
+        // ==========================================
+        // 【邏輯 1】：之前漏更新 (首列日期 + 1 天 不是今天) -> 100% 抓落球補上
+        // ==========================================
+        if (nextTargetDate !== todayStr) {
+            console.log(`[執行步驟 1] 發現歷史斷層！正在補更 ${nextTargetDate} 的【落球】。`);
+            const newRowStr = `['${nextTargetDate}',${dropBallsStr}],`;
+            
+            // 精準塞到 var 7788 = [ 的下一行
+            let newJsContent = jsContent.replace(/(var\s+7788\s*=\s*\[)/, `$1\n${newRowStr}`);
+            fs.writeFileSync(JS_FILE_PATH, newJsContent, 'utf-8');
+            console.log(`[成功] 補更完畢！已成功置入落球資料。`);
+            return;
+        }
+
+        // ==========================================
+        // 【邏輯 2 與 3】：推算日期就是今天 (nextTargetDate === todayStr)
+        // ==========================================
+        
+        // 檢查當前 7788.js 首列是不是已經是今天的日期了
+        if (latestDateInJs !== todayStr) {
+            // 代表此時是 20:40 左右，今天的第一棒：抓【順球】插入首列
+            console.log(`[執行步驟 2] 偵測到今日新開獎！正在為您置入 ${todayStr} 的【順球】。`);
+            const newRowStr = `['${todayStr}',${orderBallsStr}],`;
+            
+            let newJsContent = jsContent.replace(/(var\s+7788\s*=\s*\[)/, `$1\n${newRowStr}`);
+            fs.writeFileSync(JS_FILE_PATH, newJsContent, 'utf-8');
+            console.log(`[成功] 今日新開獎【順球】已成功插入首列。`);
+        } else {
+            // 代表首列已經是今天，此時是 21:30 之後的第二棒：要把現有的首列（順球）「替換覆蓋」成【落球】
+            console.log(`[執行步驟 3] 今日首列已存在，正在將其覆蓋並替換更新為【落球】。`);
+            const targetDropRowStr = `['${todayStr}',${dropBallsStr}],`;
+            
+            // 用剛剛正則匹配到的第一列舊字串，直接完全替換成最新的落球字串
+            let newJsContent = jsContent.replace(firstRowString, targetDropRowStr);
+            fs.writeFileSync(JS_FILE_PATH, newJsContent, 'utf-8');
+            console.log(`[成功] 今日首列已完美覆蓋為最新【落球】序列！`);
+        }
+
+    } catch (error) {
+        console.error("自動更新過程中發生系統錯誤:", error.message);
+    }
 }
 
-main();
+run();
