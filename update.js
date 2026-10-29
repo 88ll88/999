@@ -30,7 +30,7 @@ async function main() {
   const targetDate = getTargetDate();
   console.log(`[系統訊息] 當前已開獎目標日期為: ${targetDate}`);
 
-  // 1. 查找 https://github.io
+  // 1. 讀取並解析本地的 7788.js
   let fileContent = '';
   if (fs.existsSync('7788.js')) {
     fileContent = fs.readFileSync('7788.js', 'utf8');
@@ -38,6 +38,7 @@ async function main() {
     fileContent = 'var 7788 = [];';
   }
 
+  // 挖出陣列字串並解析
   const dataMatch = fileContent.match(/var\s+7788\s*=\s*(\[[\s\S]*?\]);/);
   let localData = [];
   if (dataMatch) {
@@ -52,48 +53,50 @@ async function main() {
   const latestDate = localData.length > 0 ? localData[0][0] : '';
   console.log(`[系統訊息] 目前 7788.js 首列日期為: ${latestDate}`);
 
-  // 比對日期決定動作
+  // 情境一：若首列日期等於目標日期
   if (latestDate === targetDate) {
-    // 若等於目標日期，則檢查是否需要把順球替換成落球
     const latestBalls = localData[0][1];
+    // 檢查首列是否為順球（由小到大排序）
     const isSorted = JSON.stringify(latestBalls) === JSON.stringify([...latestBalls].sort((a, b) => parseInt(a) - parseInt(b)));
     
     if (isSorted) {
-      console.log(`[執行] 首列為順球，進行【替換落球】步驟...`);
+      console.log(`[巡邏] 首列為順球，前往 9800 查找落球進行替換...`);
       const dropBalls = await fetch9800Drop(targetDate);
       if (dropBalls) {
-        localData[0][1] = dropBalls; // 替換為落球×5
-        saveData(localData);
-        console.log(`[成功] 已將首列替換成落球: ${JSON.stringify(dropBalls)}`);
+        // 替換首列的順球為落球
+        localData[0][1] = dropBalls; 
+        // 【重要修正】立刻寫入 7788.js 檔案！
+        saveData(localData); 
+        console.log(`[成功] 已將 7788.js 首列順球替換成落球並儲存！`);
+      } else {
+        console.log('[等待] 9800 尚無最新落球，維持順球。');
       }
     } else {
-      console.log('[已更新] 首列已是落球，無需動作。');
+      console.log('[完成] 首列已是落球，無需動作。');
     }
     return;
   }
 
-  // -------------------------------------------------------------
-  // 核心邏輯 A：若首列日期小於目標日期且差距 2 期以上
-  // -------------------------------------------------------------
-  // 計算相差天數（大於1天代表落後2期以上，排除週日）
+  // 計算相差天數
   const d1 = new Date(latestDate);
   const d2 = new Date(targetDate);
   const diffTime = Math.abs(d2 - d1);
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-  if (diffDays > 1) {
-    console.log(`[情境] 首列日期小於目標日期，且需更新 2 期以上。`);
-    console.log(`[執行] 搜索 9800.com.tw 查找[日期]及[落球×5]...`);
-    
-    // 這裡我們去 9800 補抓落後的所有落球期數
+  // -------------------------------------------------------------
+  // 核心邏輯 A：若首列日期小於目標日期且差距 2 期以上
+  // -------------------------------------------------------------
+  if (diffDays > 1 && latestDate < targetDate) {
+    console.log(`[情境] 需更新 2 期以上，前往 9800 補抓歷史落球...`);
     const allDropData = await fetchAll9800Drops(latestDate, targetDate);
     if (allDropData && allDropData.length > 0) {
-      // 依日期最上方為最新，插入 7788.js 首列
+      // 日期最上方為最新，倒序插入首列
       for (const item of allDropData.reverse()) {
         localData.unshift([item.date, item.balls]);
       }
+      // 立刻寫入 7788.js 檔案！
       saveData(localData);
-      console.log(`[成功] 已將缺失的多期落球插入首列。`);
+      console.log(`[成功] 已將多期歷史落球寫入 7788.js`);
     }
     return;
   }
@@ -102,34 +105,35 @@ async function main() {
   // 核心邏輯 B：若首列日期需更新 1 期
   // -------------------------------------------------------------
   if (diffDays === 1 || latestDate < targetDate) {
-    console.log(`[情境] 首列日期需更新 1 期，更新日期為 ${targetDate}`);
+    console.log(`[情境] 需更新 1 期，更新日期為 ${targetDate}`);
     
-    // 1. 查找 [今彩539或539] 裡的日期: 2026-10-29 + 順球×5 (用 Yahoo 查找)
+    // 1. 用 Yahoo 查找順球×5
     console.log(`[執行] 前往 Yahoo 查找順球...`);
     const sortBalls = await fetchYahooSort();
     if (sortBalls) {
-      // 2. 插入 7788.js 首列: "[日期,[順球×5]],"
+      // 2. 先把順球插入首列變數
       localData.unshift([targetDate, sortBalls]);
+      // 3. 【立刻寫入 7788.js】讓 20:40 第一時間有順球資料可以用！
       saveData(localData);
-      console.log(`[成功] 已插入首列: ["${targetDate}", ${JSON.stringify(sortBalls)}]`);
+      console.log(`[順球寫入] 已將順球寫入 7788.js 首列`);
       
-      // 3. 貼上 7788.js 裡的首列：也就是替換 "順球×5"，改為 "落球×5"
-      // 4. 搜 9800.com.tw/lotto539/drop.html，查找 [今彩539或539]+[日期]+[落球×5]
-      console.log(`[連續執行] 前往 9800 查找落球進行替換...`);
+      // 4. 不要停！緊接著前往 9800 查找落球
+      console.log(`[連續執行] 緊接著前往 9800 查找落球進行替換...`);
       const dropBalls = await fetch9800Drop(targetDate);
       if (dropBalls) {
-        // 5. 替換: 將首列 "[日期,[順球×5]]," 替換成 "[日期,[落球×5]],"
+        // 5. 替換首列的號碼為落球
         localData[0][1] = dropBalls;
+        // 6. 【再次立刻寫入 7788.js】完成替換！
         saveData(localData);
-        console.log(`[成功] 替換成功！首列已替換為落球: ${JSON.stringify(dropBalls)}`);
+        console.log(`[落球替換] 成功！已將 7788.js 首列替換為落球並儲存`);
       } else {
-        console.log(`[提示] 9800 目前尚無落球，首列暫時保持順球，等待下次排程替換。`);
+        console.log(`[提示] 9800 目前尚無落球，首列暫時保持順球，留待後續巡邏更新。`);
       }
     }
   }
 }
 
-// 爬取 Yahoo 奇摩彩券（查找順球×5）
+// 爬取 Yahoo 奇摩彩券（順球）
 async function fetchYahooSort() {
   try {
     const res = await fetch('https://yahoo.com', {
@@ -148,7 +152,7 @@ async function fetchYahooSort() {
   return null;
 }
 
-// 搜 9800.com.tw/lotto539/drop.html，查找 [今彩539或539]+[日期]+[落球×5]
+// 爬取 9800 樂透堂（落球）
 async function fetch9800Drop(dateStr) {
   try {
     const res = await fetch('https://9800.com.tw', {
@@ -166,7 +170,7 @@ async function fetch9800Drop(dateStr) {
   return null;
 }
 
-// 補抓 9800 多期落球的輔助函式
+// 補抓 9800 多期歷史落球
 async function fetchAll9800Drops(fromDate, toDate) {
   try {
     const res = await fetch('https://9800.com.tw', {
@@ -175,8 +179,7 @@ async function fetchAll9800Drops(fromDate, toDate) {
     const html = await res.text();
     let results = [];
     
-    // 抓取 9800 表格中所有的日期與落球序
-    const regex = /(\d{4}-\d{2}-\d{2})[\s\S]*?週[^>]*?>\\s*([\d\s]+?)\\s*</g;
+    const regex = /(\d{4}-\d{2}-\d{2})[\s\S]*?週[^>]*?>\s*([\d\s]+?)\s*</g;
     let match;
     while ((match = regex.exec(html)) !== null) {
       const matchDate = match[1];
@@ -193,11 +196,11 @@ async function fetchAll9800Drops(fromDate, toDate) {
   }
 }
 
-// 儲存資料回 7788.js（排除任何空格）
+// 【嚴格格式化儲存】確保無多餘空格與換行，完美輸出單行資料
 function saveData(data) {
-  const jsonStr = JSON.stringify(data);
-  // 嚴格確保符合您的 var 7788 = [...] 格式，無多餘空格
-  const finalContent = `var 7788=${jsonStr};`;
+  // 將陣列轉換成格式化的單行字串
+  const rows = data.map(item => `['${item[0]}',${JSON.stringify(item[1])}]`);
+  const finalContent = `var 7788 = [\n${rows.join(',\n')}\n];`;
   fs.writeFileSync('7788.js', finalContent, 'utf8');
 }
 
