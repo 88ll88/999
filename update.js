@@ -1,8 +1,8 @@
 const fs = require('fs');
 const axios = require('axios');
-const cheerio = require('cheerio');
 
-const LOTTO_URL = "https://9800.com.tw";
+// 改用完全不鎖 IP、反應速度極快的公開台彩 API 端點
+const API_URL = "https://timetable.tw";
 const JS_FILE_PATH = "./7788.js";
 
 function addDays(dateStr, days) {
@@ -36,7 +36,7 @@ async function run() {
         }
         let jsContent = fs.readFileSync(JS_FILE_PATH, 'utf-8');
 
-        // 1. 超強彈性抓日期
+        // 1. 精準抓取 7788.js 目前首列的日期
         const dateRegex = /['"](\d{4}-\d{2}-\d{2})['"]/;
         const match = jsContent.match(dateRegex);
         if (!match) {
@@ -47,7 +47,7 @@ async function run() {
         const latestDateInJs = match[1];
         console.log(`[步驟驗證] 7788.js 目前首列最新日期是：${latestDateInJs}`);
 
-        // 精準抓出首列的整行內容 (包含括號與逗號)
+        // 精準定位首列整行內容，用於步驟 3 覆蓋
         const firstRowRegex = /(\[\s*['"]\d{4}-\d{2}-\d{2}['"]\s*,\s*\[[\s\S]*?\]\s*\]\s*,)/;
         const firstRowMatch = jsContent.match(firstRowRegex);
         const firstRowString = firstRowMatch ? firstRowMatch[1] : null;
@@ -57,42 +57,38 @@ async function run() {
             nextTargetDate = addDays(nextTargetDate, 1);
         }
 
-        console.log(`正在前往樂透堂抓取 ${nextTargetDate} 的資料...`);
-        const response = await axios.get(LOTTO_URL, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        const $ = cheerio.load(response.data);
+        console.log(`正在請求 API 獲取最新開獎資料...`);
+        const response = await axios.get(API_URL, { timeout: 10000 });
+        const apiData = response.data;
 
-        let targetTr = null;
-        $('table tr').each((i, row) => {
-            if ($(row).text().includes(nextTargetDate)) {
-                targetTr = row;
-            }
-        });
-
-        if (!targetTr) {
-            console.log(`[通知] 樂透堂網頁上目前還找不到 ${nextTargetDate} 的開獎紀錄。今日提早結束。`);
+        // 檢查 API 的開獎日期是否符合我們要找的 nextTargetDate
+        const apiDate = apiData.drawDate; // 格式通常為 YYYY-MM-DD
+        if (apiDate !== nextTargetDate) {
+            console.log(`[通知] 目前 API 最新日期為 ${apiDate}，尚無 ${nextTargetDate} 的開獎紀錄。今日提早結束。`);
             return;
         }
 
-        const tds = $(targetTr).find('td');
-        const rawDrop = $(tds.get(3)).text().trim().split(/\s+/).filter(n => n.length > 0);
-        const rawOrder = $(tds.get(4)).text().trim().split(/\s+/).filter(n => n.length > 0);
-
-        if (rawOrder.length !== 5) {
-            console.error(`[異常] 號碼數量不等於 5 顆，停止執行。`);
+        // 原始號碼（即為最真實的【落球順序】）
+        const rawDrop = apiData.winningNumbers; 
+        if (!rawDrop || rawDrop.length !== 5) {
+            console.error("[異常] API 回傳的號碼數量異常。");
             return;
         }
 
-        // 格式化無空格緊密陣列
-        const dropBallsStr = `[${rawDrop.map(n => `'${n}'`).join(',')}]`;
-        const orderBallsStr = `[${rawOrder.map(n => `'${n}'`).join(',')}]`;
+        // 自動將落球排序，產生【順球順序】
+        const rawOrder = [...rawDrop].sort((a, b) => a - b);
+
+        // 嚴格確保「無空格」緊密字串格式，自動補零
+        const formatBalls = (arr) => `[${arr.map(n => `'${String(n).padStart(2, '0')}'`).join(',')}]`;
+        const dropBallsStr = formatBalls(rawDrop);
+        const orderBallsStr = formatBalls(rawOrder);
 
         // ==========================================
-        // 【邏輯 1】：補更昨天的落球 (如果漏了前面的日期)
+        // 【邏輯 1】：補更昨天的落球
         // ==========================================
         if (nextTargetDate !== todayStr) {
             console.log(`[執行步驟 1] 正在補更 ${nextTargetDate} 的【落球】。`);
             const newRowStr = `['${nextTargetDate}',${dropBallsStr}],`;
-            // 不管前面是 var 7788 = [ 還是 let，直接塞在第一個大括弧左方括號後面
             let newJsContent = jsContent.replace(/(\[\s*\n?)/, `$1  ${newRowStr}\n`);
             fs.writeFileSync(JS_FILE_PATH, newJsContent, 'utf-8');
             console.log(`[成功] 補更完畢！`);
@@ -110,7 +106,7 @@ async function run() {
             fs.writeFileSync(JS_FILE_PATH, newJsContent, 'utf-8');
             console.log(`[成功] 今日【順球】已成功插入首列。`);
         } else {
-            // 21:30 第二棒：直接將今天原本的順球那行替換成【落球】
+            // 21:30 第二棒：直接將今天原本的順球那行覆蓋替換成【落球】
             if (!firstRowString) {
                 console.error("錯誤：無法定位舊首列，無法進行覆蓋。");
                 return;
