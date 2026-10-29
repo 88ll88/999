@@ -1,32 +1,32 @@
-name: Auto Update 539 Data
+name: 539 Auto Update
 
 on:
   schedule:
-    # 每天 20:40, 20:50, 21:00, 21:30, 22:00 執行 (UTC時間 12:40, 12:50, 13:00, 13:30, 14:00)
-    - cron: '40,50 12 * * 1-6'
-    - cron: '0,30 13 * * 1-6'
-    - cron: '0 14 * * 1-6'
-
-  workflow_dispatch: # 允許手動觸發執行
+    - cron: '40 12 * * 1-6' # 台灣 20:40
+    - cron: '50 12 * * 1-6' # 台灣 20:50
+    - cron: '00 13 * * 1-6' # 台灣 21:00
+    - cron: '30 13 * * 1-6' # 台灣 21:30
+    - cron: '00 14 * * 1-6' # 台灣 22:00
+  workflow_dispatch:
 
 jobs:
-  update:
+  update-lotto:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: 檢查專案原始碼
+        uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      - name: 安裝最新 Node.js 環境
+        uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: 20
 
-      - name: Run Update Script
+      - name: 執行更新腳本
         run: node update.js
 
-      - name: Commit and Push Changes
+      - name: 將最新資料提交回 GitHub 倉庫
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
           git add 7788.js
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto update 7788.js [skip ci]" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto updated 539" && git push)
