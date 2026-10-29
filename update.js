@@ -2,7 +2,7 @@ const fs = require('fs');
 
 // 取得當前台北時間的已開獎目標日期（處理20:40分界與週日）
 function getTargetDate() {
-  const now = new Date(new Date().getTime() + (8 * 60 * 60 * 1000)); // 轉換為 UTC+8
+  const now = new Date(new Date().getTime() + (8 * 60 * 60 * 1000)); // UTC+8
   const hours = now.getUTCHours();
   const minutes = now.getUTCMinutes();
   const timeVal = hours * 100 + minutes;
@@ -21,57 +21,43 @@ function getTargetDate() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// 格式化彩券號碼為兩位數陣列
-function formatNumbers(numStr) {
-  return numStr.trim().split(/[\s,]+/).map(n => String(n.trim()).padStart(2, '0'));
-}
-
 async function main() {
   const targetDate = getTargetDate();
   console.log(`[系統訊息] 當前已開獎目標日期為: ${targetDate}`);
 
   // 1. 讀取並解析本地的 7788.js
-  let fileContent = '';
-  if (fs.existsSync('7788.js')) {
-    fileContent = fs.readFileSync('7788.js', 'utf8');
-  } else {
-    fileContent = 'var 7788 = [];';
-  }
-
-  // 【精準修正】修正正則表達式，精準撈出舊資料的日期與號碼
+  let fileContent = fs.existsSync('7788.js') ? fs.readFileSync('7788.js', 'utf8') : 'var 7788 = [];';
   let localData = [];
   const rowRegex = /\['(\d{4}-\d{2}-\d{2})',\s*\[([\d\s',]+)\]\]/g;
   let match;
   while ((match = rowRegex.exec(fileContent)) !== null) {
-    const date = match[1];
-    // 把 ['35','13'...] 轉回乾淨的 ['35','13'...] 陣列
-    const balls = match[2].replace(/['\s]/g, '').split(',');
-    localData.push([date, balls]);
+    localData.push([match[1], match[2].replace(/['\s]/g, '').split(',')]);
   }
 
   const latestDate = localData.length > 0 ? localData[0][0] : '';
   const latestBalls = localData.length > 0 ? localData[0][1] : [];
   console.log(`[系統訊息] 目前 7788.js 首列日期為: ${latestDate}`);
 
-  // 檢查首列是否為順球（由小到大排序）
+  // 檢查本地首列是否為順球（由小到大排序）
   let isSorted = false;
   if (latestBalls.length === 5) {
     isSorted = JSON.stringify(latestBalls) === JSON.stringify([...latestBalls].sort((a, b) => parseInt(a) - parseInt(b)));
   }
 
   // =============================================================
-  // 情境一：若首列日期等於目標日期
+  // 情況一：若首列日期等於目標日期 (20:40~00:00 巡邏落球階段)
   // =============================================================
   if (latestDate === targetDate) {
     if (isSorted) {
-      console.log(`[巡邏] 首列目前為順球，前往 9800 查找落球進行替換...`);
-      const dropBalls = await fetch9800Drop(targetDate);
-      if (dropBalls) {
-        localData[0][1] = dropBalls; // 替換首列的順球為落球
+      console.log(`[巡邏] 首列目前為順球，前往 Yahoo 查找最新落球...`);
+      const yahooData = await fetchYahooData();
+      // 確保抓到的 Yahoo 日期符合，且有落球數據
+      if (yahooData && yahooData.date === targetDate && yahooData.drawOrder) {
+        localData[0][1] = yahooData.drawOrder; // 替換首列為落球×5
         saveData(localData); 
-        console.log(`[成功] 已將 7788.js 首列順球替換成落球並儲存！`);
+        console.log(`[落球替換] 成功！已將首列順球替換成 Yahoo 最新落球！`);
       } else {
-        console.log('[等待] 9800 尚無最新落球，維持順球。');
+        console.log('[等待] Yahoo 尚無最新落球，維持順球。');
       }
     } else {
       console.log('[完成] 首列已是落球，無需動作。');
@@ -80,119 +66,81 @@ async function main() {
   }
 
   // =============================================================
-  // 情境二：需更新（包含更新 1 期 或 2 期以上）
+  // 情況二：少期數需更新
   // =============================================================
   if (latestDate < targetDate) {
-    // 計算相差天數
-    const d1 = new Date(latestDate);
-    const d2 = new Date(targetDate);
-    const diffTime = Math.abs(d2 - d1);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    console.log(`[情境] 目標日期為 ${targetDate}，開始連線 Yahoo 獲取數據...`);
+    const yahooData = await fetchYahooData();
 
-    // A. 差距 2 期以上：去 9800 補抓歷史落球
-    if (diffDays > 1 && latestDate !== '') {
-      console.log(`[情境] 需更新 2 期以上，前往 9800 補抓歷史落球...`);
-      const allDropData = await fetchAll9800Drops(latestDate, targetDate);
-      if (allDropData && allDropData.length > 0) {
-        for (const item of allDropData.reverse()) {
-          localData.unshift([item.date, item.balls]);
-        }
-        saveData(localData);
-        console.log(`[成功] 已將多期歷史落球寫入 7788.js`);
-      }
+    if (!yahooData || yahooData.date !== targetDate) {
+      console.log('[延遲] Yahoo 網頁尚未更新今日開獎日期與數據。');
       return;
     }
 
-    // B. 需更新 1 期（例如今天 2026-10-29 開獎）
-    console.log(`[情境] 需更新 1 期，目標日期為 ${targetDate}`);
-    
-    // 1. 查找 Yahoo 順球×5
-    console.log(`[執行] 前往 Yahoo 查找順球...`);
-    const sortBalls = await fetchYahooSort();
-    if (sortBalls) {
-      // 2. 順球 OK 就插入首列變數，並且【立刻寫入 7788.js】
-      localData.unshift([targetDate, sortBalls]);
-      saveData(localData);
+    // 1. 查找 [今彩539或539] 裡的日期 + 順球×5
+    if (yahooData.sizeOrder) {
+      // 2. 插入 7788.js 首列: "[日期,[順球×5]],"
+      localData.unshift([targetDate, yahooData.sizeOrder]);
+      saveData(localData); // 【立刻寫入 7788.js，就算只有順球也會安全留存！】
       console.log(`[順球寫入] 順球 OK，已插入首列並寫入 7788.js`);
       
-      // 3. 不要停！緊接著查找落球×5
-      console.log(`[連續執行] 緊接著前往 9800 查找落球...`);
-      const dropBalls = await fetch9800Drop(targetDate);
-      if (dropBalls) {
-        // 4. 落球 OK 就替換首列
-        localData[0][1] = dropBalls;
+      // 3. 貼上 7788.js 裡的首列：也就是替換 "順球×5"，改為 "落球×5"
+      // 4. 查找 [今彩539或539]+[日期]+[落球×5]
+      console.log(`[連續執行] 緊接著檢查 Yahoo 是否已備有落球進行替換...`);
+      if (yahooData.drawOrder) {
+        // 5. 替換成 "[日期,[落球×5]],"
+        localData[0][1] = yahooData.drawOrder;
         saveData(localData); // 【再次立刻寫入 7788.js】
-        console.log(`[落球替換] 落球 OK，已將首列替換為落球並儲存！`);
+        console.log(`[落球替換] 落球 OK，已將首列順球替換為落球並儲存！`);
       } else {
-        console.log(`[提示] 9800 目前尚無落球，首列暫時保持順球，留待後續巡邏更新。`);
+        console.log(`[提示] Yahoo 目前尚無落球。流程停止，首列安全保持順球狀態。`);
       }
     }
   }
 }
 
-// 爬取 Yahoo 奇摩彩券（順球）
-async function fetchYahooSort() {
+// 專門從 Yahoo 抓取最新日期的順球與落球
+async function fetchYahooData() {
   try {
     const res = await fetch('https://yahoo.com', {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
     });
+    if (!res.ok) return null;
     const html = await res.text();
-    const ballMatch = html.match(/"paddedSizeOrder":\["([\d",]+)"\]/);
-    if (ballMatch) {
-      return ballMatch[1].split('","').map(n => String(n).padStart(2, '0'));
-    }
-    const balls = [...html.matchAll(/class="[^"]*ball[^"]*"[^>]*>(\d+)</gi)].map(m => String(m).padStart(2, '0'));
-    if (balls.length >= 5) return balls.slice(0, 5).sort((a, b) => parseInt(a) - parseInt(b));
-  } catch(e) {
-    console.log(`Yahoo 順球查找失敗: ${e.message}`);
-  }
-  return null;
-}
 
-// 爬取 9800 樂透堂（落球）
-async function fetch9800Drop(dateStr) {
-  try {
-    const res = await fetch('https://9800.com.tw', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-    });
-    const html = await res.text();
-    const regex = new RegExp(`${dateStr}[\\s\\S]*?週[^>]*?>\\s*([\\d\\s]+?)\\s*<`);
-    const match = html.match(regex);
-    if (match) {
-      return formatNumbers(match[1]);
-    }
-  } catch(e) {
-    console.log(`9800 落球查找失敗: ${e.message}`);
-  }
-  return null;
-}
+    // 提取 Yahoo 當前的開獎日期 (格式如 2026-10-29)
+    const dateMatch = html.match(/"drawDate":"(\d{4}-\d{2}-\d{2})/);
+    if (!dateMatch) return null;
+    const webDate = dateMatch[1];
 
-// 補抓 9800 多期歷史落球
-async function fetchAll9800Drops(fromDate, toDate) {
-  try {
-    const res = await fetch('https://9800.com.tw', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-    });
-    const html = await res.text();
-    let results = [];
-    const regex = /(\d{4}-\d{2}-\d{2})[\s\S]*?週[^>]*?>\s*([\d\s]+?)\s*</g;
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-      const matchDate = match[1];
-      if (matchDate > fromDate && matchDate <= toDate) {
-        results.push({
-          date: matchDate,
-          balls: formatNumbers(match[2])
-        });
+    let result = { date: webDate, sizeOrder: null, drawOrder: null };
+
+    // 提取順球 (paddedSizeOrder)
+    const sizeMatch = html.match(/"paddedSizeOrder":\["([\d",]+)"\]/);
+    if (sizeMatch) {
+      result.sizeOrder = sizeMatch[1].split('","').map(n => String(n).padStart(2, '0'));
+    }
+
+    // 提取落球 (paddedDrawOrder)
+    const drawMatch = html.match(/"paddedDrawOrder":\["([\d",]+)"\]/);
+    if (drawMatch) {
+      const tempDraw = drawMatch[1].split('","').map(n => String(n).padStart(2, '0'));
+      // 防呆：如果 Yahoo 的落球陣列和順球陣列完全一樣（表示落球序還沒真正產出），就視為落球尚未出來
+      if (result.sizeOrder && JSON.stringify(result.sizeOrder) === JSON.stringify(tempDraw)) {
+        result.drawOrder = null;
+      } else {
+        result.drawOrder = tempDraw;
       }
     }
-    return results;
-  } catch(e) {
-    return [];
+
+    return result;
+  } catch (e) {
+    console.log(`Yahoo 連線失敗: ${e.message}`);
+    return null;
   }
 }
 
-// 【精準格式化儲存】嚴格符合你的 ['2026-10-28',['35','13','11','19','06']], 格式
+// 儲存資料，格式完全對齊你的 7788.js
 function saveData(data) {
   const rows = data.map(item => {
     const ballStr = item[1].map(b => `'${b}'`).join(',');
