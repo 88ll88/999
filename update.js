@@ -36,7 +36,7 @@ async function run() {
         }
         let jsContent = fs.readFileSync(JS_FILE_PATH, 'utf-8');
 
-        // 改用超強彈性正則，不管是單引號、雙引號、有沒有空格，只要有 4碼-2碼-2碼 就能精準抓到
+        // 1. 超強彈性抓日期
         const dateRegex = /['"](\d{4}-\d{2}-\d{2})['"]/;
         const match = jsContent.match(dateRegex);
         if (!match) {
@@ -47,7 +47,7 @@ async function run() {
         const latestDateInJs = match[1];
         console.log(`[步驟驗證] 7788.js 目前首列最新日期是：${latestDateInJs}`);
 
-        // 精準定位出目前 7788.js 的第一整行格式，用來在步驟 3 做精準覆蓋
+        // 精準抓出首列的整行內容 (包含括號與逗號)
         const firstRowRegex = /(\[\s*['"]\d{4}-\d{2}-\d{2}['"]\s*,\s*\[[\s\S]*?\]\s*\]\s*,)/;
         const firstRowMatch = jsContent.match(firstRowRegex);
         const firstRowString = firstRowMatch ? firstRowMatch[1] : null;
@@ -69,7 +69,7 @@ async function run() {
         });
 
         if (!targetTr) {
-            console.log(`[通知] 樂透堂網頁上目前還找不到 ${nextTargetDate} 的開獎紀錄。`);
+            console.log(`[通知] 樂透堂網頁上目前還找不到 ${nextTargetDate} 的開獎紀錄。今日提早結束。`);
             return;
         }
 
@@ -78,38 +78,39 @@ async function run() {
         const rawOrder = $(tds.get(4)).text().trim().split(/\s+/).filter(n => n.length > 0);
 
         if (rawOrder.length !== 5) {
-            console.error(`[異常] 查找到 ${nextTargetDate} 的號碼數量不等於 5 顆，停止執行。`);
+            console.error(`[異常] 號碼數量不等於 5 顆，停止執行。`);
             return;
         }
 
-        // 嚴格確保「無空格」緊密格式
+        // 格式化無空格緊密陣列
         const dropBallsStr = `[${rawDrop.map(n => `'${n}'`).join(',')}]`;
         const orderBallsStr = `[${rawOrder.map(n => `'${n}'`).join(',')}]`;
 
         // ==========================================
-        // 【邏輯 1】：補更昨天的落球
+        // 【邏輯 1】：補更昨天的落球 (如果漏了前面的日期)
         // ==========================================
         if (nextTargetDate !== todayStr) {
             console.log(`[執行步驟 1] 正在補更 ${nextTargetDate} 的【落球】。`);
             const newRowStr = `['${nextTargetDate}',${dropBallsStr}],`;
-            let newJsContent = jsContent.replace(/(var\s+7788\s*=\s*\[)/, `$1\n  ${newRowStr}`);
+            // 不管前面是 var 7788 = [ 還是 let，直接塞在第一個大括弧左方括號後面
+            let newJsContent = jsContent.replace(/(\[\s*\n?)/, `$1  ${newRowStr}\n`);
             fs.writeFileSync(JS_FILE_PATH, newJsContent, 'utf-8');
             console.log(`[成功] 補更完畢！`);
             return;
         }
 
         // ==========================================
-        // 【邏輯 2 與 3】：處理今天的日期
+        // 【邏輯 2 與 3】：處理今天的最新開獎
         // ==========================================
         if (latestDateInJs !== todayStr) {
             // 20:40 第一棒：插入【順球】
             console.log(`[執行步驟 2] 正在置入今日 ${todayStr} 的【順球】。`);
             const newRowStr = `['${todayStr}',${orderBallsStr}],`;
-            let newJsContent = jsContent.replace(/(var\s+7788\s*=\s*\[)/, `$1\n  ${newRowStr}`);
+            let newJsContent = jsContent.replace(/(\[\s*\n?)/, `$1  ${newRowStr}\n`);
             fs.writeFileSync(JS_FILE_PATH, newJsContent, 'utf-8');
             console.log(`[成功] 今日【順球】已成功插入首列。`);
         } else {
-            // 21:30 第二棒：把今天的順球整列，直接覆蓋替換成【落球】
+            // 21:30 第二棒：直接將今天原本的順球那行替換成【落球】
             if (!firstRowString) {
                 console.error("錯誤：無法定位舊首列，無法進行覆蓋。");
                 return;
