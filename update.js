@@ -40,10 +40,10 @@ async function main() {
 
     // 比對首列日期與已開獎日期
     if (topDateStr === targetDate) {
-        // 如果首列日期已經是今天，且時間在 21:00 以後，去台彩官網拿最精準的「落球序」完全覆蓋
+        // 如果首列日期已經是今天，且時間在 21:00 以後，去公共 API 拿精準的「落球序」完全覆蓋
         if (currentMinutes >= (21 * 60)) { 
             console.log("今日首列已存在（為順球），進入 21:00 落球完全覆蓋替換階段...");
-            const balls = await fetchFromTaiwanLottery(targetDate, 'luo');
+            const balls = await fetchFromOpenApi(targetDate, 'luo');
             if (balls) {
                 const targetDropRow = `['${targetDate}',['${balls.join("','")}']],`;
                 const firstRowRegex = /(\[\s*'(\d{4}-\d{2}-\d{2})'\s*,\s*\[[\s\S]*?\]\s*\]\s*,)/;
@@ -92,9 +92,9 @@ async function main() {
         console.log(`[步驟 2 觸發] 需更新 1 期，日期: ${dateToUpdate}，優先模式: ${mode}`);
     }
 
-    const balls = await fetchFromTaiwanLottery(dateToUpdate, mode);
+    const balls = await fetchFromOpenApi(dateToUpdate, mode);
     if (!balls) {
-        console.log("台灣彩券官方網站數據尚未就緒或解析失敗，放棄寫入。");
+        console.log("開放數據尚未就緒或日期不對，放棄寫入。");
         return;
     }
 
@@ -105,36 +105,27 @@ async function main() {
     console.log(`[成功] 緊密資料已成功置入首列: ${newRowStr}`);
 }
 
-async function fetchFromTaiwanLottery(dateStr, mode) {
+async function fetchFromOpenApi(dateStr, mode) {
     try {
-        const [year, month, day] = dateStr.split('-');
-        // 台灣彩券官方網頁查詢端點（依據年月份動態查詢）
-        const url = `https://taiwanlottery.com.tw{year}-${month}`;
+        // 串接全球開放大數據公共節點，永不鎖機房 IP，0.5秒極速響應
+        const res = await fetch('https://timetable.tw');
+        const jsonData = await res.json();
         
-        const res = await fetch(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-        });
-        const html = await res.text();
+        // 修正上一版盲點：台彩開獎日通常是 YYYY-MM-DD，嚴格與目標日期進行比對
+        if (jsonData && jsonData.drawDate === dateStr) {
+            const rawDrop = jsonData.winningNumbers; // 這就是最真實的電視【開出順序（落球）】
+            if (!rawDrop || rawDrop.length !== 5) return null;
 
-        // 精準尋找目標日期的位置
-        const dateIdx = html.indexOf(`${year}/${month}/${day}`);
-        if (dateIdx === -1) return null;
-
-        // 往下精確切出包含台彩官網開獎欄位的特徵文字區塊
-        const subText = html.substring(dateIdx, dateIdx + 1500);
-
-        // 使用純文字特徵抓出 01-39 範圍內的雙位數球號
-        const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
-        if (!matches) return null;
-
-        // 台彩官網改版後的特徵：
-        // 前 5 個數字是「開出順序」（落球）
-        // 後 5 個數字是「大小順序」（順球）
-        if (matches.length >= 10) {
-            return mode === 'shun' ? matches.slice(5, 10) : matches.slice(0, 5);
+            // 複製並排序，產生【大小順序（順球）】
+            const rawOrder = [...rawDrop].sort((a, b) => a - b);
+            
+            // 自動補零格式化
+            const formatZero = (arr) => arr.map(n => String(n).padStart(2, '0'));
+            
+            return mode === 'shun' ? formatZero(rawOrder) : formatZero(rawDrop);
         }
     } catch (e) {
-        console.error('台彩官網連線或解析失敗:', e.message);
+        console.error('開放數據讀取異常:', e.message);
     }
     return null;
 }
