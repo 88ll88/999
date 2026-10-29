@@ -1,42 +1,39 @@
-name: 自動更新 7788.js
+name: 539 Auto Update
 
 on:
   schedule:
-    # 台灣時間 21:00 執行抓順球 (UTC 13:00)
-    - cron: '0 13 * * 1-6'
-    # 台灣時間 23:00 執行抓落球覆蓋 (UTC 15:00)
-    - cron: '0 15 * * 1-6'
-  workflow_dispatch:
+    # 這裡的 Cron 排程時間已轉換為台灣時間：
+    # 12:40 UTC = 20:40 台灣時間
+    # 13:00 UTC = 21:00 台灣時間
+    # 13:30 UTC = 21:30 台灣時間
+    # 14:00 UTC = 22:00 台灣時間
+    - cron: '40 12 * * 1-6'
+    - cron: '00 13 * * 1-6'
+    - cron: '30 13 * * 1-6'
+    - cron: '00 14 * * 1-6'
+  workflow_dispatch: # 保留手動點擊執行按鈕
 
 jobs:
-  update-data:
+  update-lotto:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - name: 檢出專案碼
+      - name: 檢查專案原始碼
         uses: actions/checkout@v4
 
-      - name: 設定 Node.js 環境
+      - name: 安裝 Node.js 環境
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: 18
 
-      - name: 判斷執行時間並自動更新
-        run: |
-          HOUR=$(date -u +%H)
-          if [ "$HOUR" -eq "13" ]; then
-            echo "--- 台灣時間 21:00：執行抓取順球 ---"
-            node update.js shun
-          else
-            echo "--- 台灣時間 23:00：執行抓取落球 ---"
-            node update.js luo
-          fi
+      - name: 安裝網頁爬蟲套件
+        run: npm install axios cheerio
 
-      - name: 自動提交並推送變更至 GitHub
+      - name: 執行更新腳本
+        run: node update.js
+
+      - name: 將最新資料提交回 GitHub 倉庫
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
           git add 7788.js
-          git commit -m "Auto-update 7788.js via GitHub Actions" || exit 0
-          git push
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto updated 539 numbers" && git push)
