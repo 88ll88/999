@@ -1,123 +1,160 @@
 const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const cheerio = require('cheerio');
+
+// 設定目標檔案路徑
+const filePath = path.join(__dirname, '7788.js');
+
+// 取得台灣時間 (UTC+8) 的當前日期與時間
+function getTaiwanTime() {
+    const now = new Date();
+    // 轉換為台灣時間
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const twTime = new Date(utc + (3600000 * 8));
+    return twTime;
+}
+
+// 格式化日期為 YYYY-MM-DD
+function formatDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+// 取得已開獎日期（根據時間點判斷）
+function getTargetDrawDate() {
+    const tw = getTaiwanTime();
+    const hours = tw.getHours();
+    const minutes = tw.getMinutes();
+    const currentTimeVal = hours * 100 + minutes;
+
+    let targetDate = new Date(tw);
+    // 00:00 至 20:40 之間，已開獎日期算昨天
+    if (currentTimeVal >= 0 && currentTimeVal <= 2040) {
+        targetDate.setDate(targetDate.getDate() - 1);
+    }
+    
+    // 檢查是否為週日（週日休息不開獎，若今天是週日則往前推算）
+    if (targetDate.getDay() === 0) {
+        targetDate.setDate(targetDate.getDate() - 1);
+    }
+
+    return formatDate(targetDate);
+}
+
+// 抓取 9800.com.tw 順球 (Daily Cash 官方或 9800)
+async function fetchShunQiu(targetDate) {
+    try {
+        // 示範以台灣彩券官方 API 或 9800 抓取今彩539順球
+        // 實務上可依照 9800.com.tw 結構解析
+        const url = 'https://www.taiwanlottery.com/lotto/result/daily_cash';
+        const response = await axios.get(url);
+        const $ = cheerio.load(response.data);
+        
+        // 這裡需配合台彩或 9800 實際 DOM 結構抓取「順球」陣列
+        // 假設順球抓出來為陣列: ['01', '02', '03', '04', '05']
+        let balls = [];
+        // TODO: 根據實際網頁結構填入解析選擇器
+        
+        return balls;
+    } catch (error) {
+        console.error('抓取順球失敗:', error.message);
+        return null;
+    }
+}
+
+// 抓取 9800.com.tw/lotto539/drop.html 落球
+async function fetchLuoQiu(targetDate) {
+    try {
+        const url = 'https://9800.com.tw/lotto539/drop.html';
+        const response = await axios.get(url);
+        const $ = cheerio.load(response.data);
+        
+        let foundDate = '';
+        let balls = [];
+
+        // 尋找對應日期的落球資料
+        // TODO: 依照 9800 drop.html 實際表格結構提取
+        
+        return { date: foundDate, balls: balls };
+    } catch (error) {
+        console.error('抓取落球失敗:', error.message);
+        return null;
+    }
+}
 
 async function main() {
-    console.log(`[${new Date().toISOString()}] 開始執行更新`);
-
-    let content = '';
-    try {
-        content = fs.readFileSync('./7788.js', 'utf8');
-    } catch (e) {
-        console.error('無法讀取 7788.js:', e.message);
-        process.exit(1);
-    }
-
-    const match = content.match(/var\s+7788\s*=\s*(\[[\s\S]*\]);?/);
-    if (!match) {
-        console.error('7788.js 格式解析失敗');
-        process.exit(1);
-    }
-
-    let records = eval('(' + match[1] + ')');
-    let topDateStr = records[0][0];
-
-    // 自動推算預計更新日期
-    let targetDate = topDateStr;
-    if (!records[0][1].includes('00') && !records[0][1].includes('NaN')) {
-        targetDate = getNextDrawDate(topDateStr);
-    }
-
-    console.log(`現有最新日期: ${topDateStr}，目標更新日期: ${targetDate}`);
-
-    // 自動依據狀態判定 mode 走 順球(shun) 或 落球(luo)
-    let mode = 'luo'; 
-    if (targetDate === getTaiwanTodayStr()) {
-        // 如果目標日期是今天，且首列還不是今天，第一棒(20:40)先查順球
-        if (topDateStr !== targetDate) {
-            mode = 'shun';
-        }
-    }
-
-    let balls = await fetch9800Table(targetDate, mode);
-
-    if (!balls || balls.length !== 5 || balls.includes('00')) {
-        console.log(`[${targetDate}] 9800 尚未更新或號碼不合法，放棄寫入。`);
+    if (!fs.existsSync(filePath)) {
+        console.error('找不到 7788.js 檔案');
         return;
     }
 
-    console.log(`成功從 9800 取得合法號碼 (${mode}): [${balls.join(',')}]`);
+    let fileContent = fs.readFileSync(filePath, 'utf8');
+    
+    // 取得目標開獎日期
+    const targetDateStr = getTargetDrawDate();
+    console.log(`計算出的目標已開獎日期為: ${targetDateStr}`);
 
-    const idx = records.findIndex(r => r[0] === targetDate);
-    if (idx !== -1) {
-        records[idx] = [targetDate, balls];
-    } else {
-        records.unshift([targetDate, balls]);
+    // 解析現有的 7788.js 內容取得首列日期
+    // 假設開頭格式為: ['2026-10-28',['35','13','11','19','06']],
+    const match = fileContent.match(/\[\s*'(\d{4}-\d{2}-\d{2})',\s*\[(.*?)\]\s*\]/);
+    if (!match) {
+        console.error('無法解析 7788.js 首列格式');
+        return;
+    }
+    const firstRowDate = match[1];
+    console.log(`7788.js 首列日期為: ${firstRowDate}`);
+
+    // 邏輯判斷
+    if (firstRowDate === targetDateStr) {
+        console.log('已是最新日期，無需更新。');
+        return;
     }
 
-    // 嚴格落實：前置無空格緊密緊湊格式
-    let rows = records.map(r => `['${r[0]}',['${r[1].join("','")}']]`).join(',\n');
-    let newContent = `var 7788 = [\n${rows}\n];\n`;
+    // 計算落後天數或期數
+    const d1 = new Date(firstRowDate);
+    const d2 = new Date(targetDateStr);
+    const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
 
-    fs.writeFileSync('./7788.js', newContent, 'utf8');
-    console.log('7788.js 檔案更新完成！');
-}
-
-function getNextDrawDate(dateStr) {
-    let d = new Date(dateStr);
-    d.setDate(d.getDate() + 1);
-    if (d.getDay() === 0) d.setDate(d.getDate() + 1); // 週日休息
-    let yyyy = d.getFullYear();
-    let mm = String(d.getMonth() + 1).padStart(2, '0');
-    let dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-}
-
-function getTaiwanTodayStr() {
-    const options = { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' };
-    const formatter = new Intl.DateTimeFormat('zh-TW', options);
-    const parts = formatter.formatToParts(new Date());
-    return `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
-}
-
-async function fetch9800Table(targetDate, mode) {
-    try {
-        // 使用安全且防鎖的完整標頭請求
-        const res = await fetch('https://9800.com.tw', {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-        });
-        const text = await res.text();
-
-        const dateIdx = text.indexOf(targetDate);
-        if (dateIdx === -1) return null;
-
-        // 往下精確切出包含中獎球號的 HTML 區塊
-        const subText = text.substring(dateIdx, dateIdx + 500);
-        
-        // 修正原版正則漏洞：精準提取 01-39 範圍內的開獎球號，並過濾掉網頁中的 HTML 標籤雜訊
-        const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
-        if (!matches) return null;
-
-        const [y, m, d] = targetDate.split('-');
-        let validNums = [];
-        
-        for (let num of matches) {
-            // 排除了與日期年月日重複的數字干擾
-            if (num !== m && num !== d && num !== y.slice(-2)) {
-                validNums.push(num);
-            }
+    if (diffDays > 1) {
+        console.log('需更新 2 期以上，從 drop.html 抓取落球...');
+        const result = await fetchLuoQiu(targetDateStr);
+        if (result && result.balls.length > 0) {
+            const newRow = `['${result.date}',['${result.balls.join("','")}']],\n`;
+            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
+            fs.writeFileSync(filePath, fileContent, 'utf8');
+            console.log(`成功補上 ${result.date} 落球資料`);
         }
-
-        // 只保留前 10 個最乾淨的球號（前 5 個落球，後 5 個順球）
-        if (validNums.length >= 10) {
-            const cleanSet = validNums.slice(0, 10);
-            const targetSet = mode === 'shun' ? cleanSet.slice(-5) : cleanSet.slice(0, 5);
-            if (targetSet.length === 5 && !targetSet.includes('00')) {
-                return targetSet;
-            }
+    } else if (diffDays === 1) {
+        console.log('需更新 1 期，先抓取順球...');
+        const shunQiuBalls = await fetchShunQiu(targetDateStr);
+        if (shunQiuBalls && shunQiuBalls.length > 0) {
+            // 先插入順球
+            const newRow = `['${targetDateStr',['${shunQiuBalls.join("','")}']],\n`;
+            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${newRow}`);
+            fs.writeFileSync(filePath, fileContent, 'utf8');
+            console.log(`已暫時插入 ${targetDateStr} 順球資料`);
         }
-    } catch (e) {
-        console.error('9800 解析失敗:', e.message);
     }
-    return null;
+
+    // 後續步驟：若時間已過 21:00，檢查並將順球替換為落球
+    const tw = getTaiwanTime();
+    if (tw.getHours() >= 21) {
+        console.log('時間已過 21:00，開始檢查並替換為落球...');
+        const dropResult = await fetchLuoQiu(targetDateStr);
+        if (dropResult && dropResult.balls.length > 0) {
+            // 將對應日期的順球替換為落球
+            const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
+            const correctedRow = `['${targetDateStr}',['${dropResult.balls.join("','")}']]`;
+            if (fileContent.match(targetRowRegex)) {
+                fileContent = fileContent.replace(targetRowRegex, correctedRow);
+                fs.writeFileSync(filePath, fileContent, 'utf8');
+                console.log(`成功將 ${targetDateStr} 順球替換為落球`);
+            }
+        }
+    }
 }
 
 main();
