@@ -3,7 +3,7 @@ const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-// 設定目標檔案路徑 (因為跟 update.js 在同一個資料夾)
+// 設定目標檔案路徑
 const filePath = path.join(__dirname, '7788.js');
 
 // 取得台灣時間 (UTC+8) 的當前日期與時間
