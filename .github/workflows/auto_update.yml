@@ -25,11 +25,15 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-
+        
     - name: 建立並執行最新的更新腳本
       run: |
-        # 直接現場用最新的程式碼寫出一個全新的 update_pure.js，徹底無視原本倉庫裡的舊檔案
-        cat << 'EOF' > update_pure.js
+        # 1. 關鍵核心：在執行前，強行把專案目錄內可能殘留的舊 update.js 刪除
+        rm -f update.js
+        rm -f update_pure.js
+
+        # 2. 現場寫入全新且網址正確的 update.js
+        cat << 'EOF' > update.js
         const https = require('https');
         const fs = require('fs');
         const path = require('path');
@@ -103,7 +107,7 @@ jobs:
                     console.error('無法解析 7788.js 的首列日期');
                     process.exit(0);
                 }
-                const lastUpdatedDate = match[1];
+                const lastUpdatedDate = match;
                 console.log(`7788.js 最新一列日期為: ${lastUpdatedDate}`);
 
                 if (lastUpdatedDate >= targetDateStr) {
@@ -169,7 +173,7 @@ jobs:
                         process.exit(0);
                     }
                 } else if (missingRows.length === 1) {
-                    const row = missingRows[0];
+                    const row = missingRows;
                     if (timeValue >= 2040 && timeValue < 2100) {
                         if (row.resultOrder && row.resultOrder.length === 5) {
                             const insertText = `['${row.drawDate}',['${row.resultOrder.join("','")}']],\n`;
@@ -198,8 +202,8 @@ jobs:
         main();
         EOF
         
-        # 執行剛才建立的乾淨腳本
-        node update_pure.js
+        # 3. 執行剛剛現場覆蓋產出的 update.js
+        node update.js
 
     - name: 檢查檔案是否有變動並提交回 GitHub
       run: |
@@ -213,3 +217,8 @@ jobs:
         else
           echo "7788.js 沒有任何變動，跳過 Commit。"
         fi
+      
+
+
+
+        
