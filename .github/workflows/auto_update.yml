@@ -1,33 +1,44 @@
-name: Auto Update 7788 Data
+name: 自動更新 7788 今彩539 獎號
 
 on:
   schedule:
-    # 依照你的開獎與更新時段設定 Cron 定時觸發：
-    # 每天晚上 20:40、20:50 (順球時間) 以及 21:00、21:30、22:00 (落球時間) 自動執行
-    # 注意：GitHub Actions 的 cron 時間是 UTC 基準，台灣時間 (UTC+8) 20:40 等於 UTC 12:40
-    - cron: '40,50 12 * * 1-6'
-    - cron: '0,30,0 13,14 * * 1-6'
-  workflow_dispatch: # 允許你隨時手動點擊按鈕執行
+    # 台北時間 20:40, 20:50 (順球時段) -> 轉為 UTC 是 12:40, 12:50
+    - cron: '40 12 * * 1-6'
+    - cron: '50 12 * * 1-6'
+    
+    # 台北時間 21:00, 21:30, 22:00 (落球時段) -> 轉為 UTC 是 13:00, 13:30, 14:00
+    - cron: '00 13 * * 1-6'
+    - cron: '30 13 * * 1-6'
+    - cron: '00 14 * * 1-6'
+    
+  workflow_dispatch: # 允許手動點擊執行
 
 jobs:
-  update-lottery:
+  update-lotto:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 簽出程式碼 (Checkout)
-        uses: actions/checkout@v3
+    - name: 檢查出專案程式碼
+      uses: actions/checkout@v4
 
-      - name: 設定 Node.js 環境
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+    - name: 設定 Node.js 環境
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
 
-      - name: 執行智慧更新腳本
-        run: node update.js
+    - name: 執行更新腳本
+      id: run_script
+      # 允許自訂結束狀態代碼 (99代表跳過)
+      continue-on-error: true
+      run: |
+        node update.js
+        echo "EXIT_CODE=$?" >> $GITHUB_ENV
 
-      - name: 自動提交並推送到 GitHub 倉庫
-        run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
-          git add 7788.js
-          git commit -m "Auto-update 7788.js lottery data [skip ci]" || exit 0
-          git push
+    - name: 檢查檔案是否有變動並提交回 GitHub
+      if: env.EXIT_CODE == '0'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add 7788.js
+        git commit -m "🤖 自動更新獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
+        git push
