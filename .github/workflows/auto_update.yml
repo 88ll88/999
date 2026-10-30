@@ -1,15 +1,44 @@
-- name: Setup Node.js
-        uses: actions/checkout@v4
+name: 自動更新 7788.js 開獎資料
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+on:
+  schedule:
+    #  UTC時間對應台灣時間 (UTC+8)
+    # 20:40 (UTC 12:40), 20:50 (12:50), 21:00 (13:00), 21:30 (13:30), 22:00 (14:00)
+    # 星期一至星期六 (CRON 週一=1, 週六=6)
+    - cron: '40 12 * * 1-6'
+    - cron: '50 12 * * 1-6'
+    - cron: '0 13 * * 1-6'
+    - cron: '30 13 * * 1-6'
+    - cron: '0 14 * * 1-6'
+  workflow_dispatch: # 支援手動觸發
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 檢出倉庫程式碼
+        uses: actions/checkout@v3
+
+      - name: 設定 Node.js 環境
+        uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: '18'
 
-      # 加上這一段：先安裝套件
-      - name: Install dependencies
-        run: npm install axios cheerio
-
-      # 再執行程式
-      - name: Run update script
+      - name: 執行 update.js
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: node update.js
+
+      - name: 檢查檔案異動並 Submit Commit
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if [[ -n $(git status --porcelain) ]]; then
+            git add 7788.js
+            git commit -m "Auto update 7788.js [skip ci]"
+            git push
+          else
+            console.log "無資料變更，跳過 Commit"
+          fi
