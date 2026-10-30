@@ -3,15 +3,14 @@ const path = require('path');
 
 const targetFilePath = path.join(__dirname, '7788.js');
 
-// 取得依據時間點判斷的目標日期 (20:35~24:00為今天，00:00~20:35為昨天)
+// 依時間判定目標日期 (20:35~24:00 為今天，00:00~20:35 為昨天)
 function getTargetDate() {
     const now = new Date();
     const hours = now.getHours();
     const minutes = now.getMinutes();
-    const timeVal = hours * 100 + minutes; // 例如 2035
+    const timeVal = hours * 100 + minutes;
 
     let target = new Date();
-    // 20:35 (2035) 之前算昨天
     if (timeVal < 2035) {
         target.setDate(target.getDate() - 1);
     }
@@ -19,7 +18,7 @@ function getTargetDate() {
 }
 
 async function runAutoUpdate() {
-    console.log('🚀 開始執行 7788.js 智慧更新與時間判定邏輯...');
+    console.log('🚀 開始執行 7788.js 智慧更新邏輯...');
 
     try {
         const targetDate = getTargetDate();
@@ -49,15 +48,14 @@ async function runAutoUpdate() {
         let updated = false;
 
         if (!isTopRowToday) {
-            // 首列不是目標日期 ➡️ 順球若行，插入首列
+            // 首列不是目標日期 ➡️ 順球若行，將新的一列插入到【最前面（首列）】
             if (fetchedOrder && fetchedOrder.length === 5) {
                 existingArray.unshift([targetDate, fetchedOrder]);
-                console.log(`✅ [順球階段] 成功將 ${targetDate} 順球插入首列！`);
+                console.log(`✅ [順球階段] 成功將 ${targetDate} 順球插入首列，保留其餘舊資料！`);
                 updated = true;
             }
         } else {
-            // 首列已經是目標日期，檢查是否需要進行落球覆蓋
-            // 假設首列目前內容剛好是順球，若落球若行則替換
+            // 首列已經是目標日期 ➡️ 落球若行，直接【替換首列】的號碼
             if (fetchedDrop && fetchedDrop.length === 5) {
                 existingArray[0] = [targetDate, fetchedDrop];
                 console.log(`✅ [落球階段] 首列已順利由順球替換為落球！`);
@@ -66,7 +64,7 @@ async function runAutoUpdate() {
         }
 
         if (updated) {
-            // 3. 寫回 7788.js 檔案，維持 var ddd = [...] 格式
+            // 3. 寫回 7788.js 檔案，維持原本的 var ddd = [...] 格式
             const outputContent = `var ddd = ${JSON.stringify(existingArray, null, 4)};\n`;
             fs.writeFileSync(targetFilePath, outputContent, 'utf8');
             console.log('✅ 7788.js 檔案寫入完成！');
