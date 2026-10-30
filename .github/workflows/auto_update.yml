@@ -36,7 +36,6 @@ jobs:
         const fs = require('fs');
         const path = require('path');
 
-        const TAI_WAN_LOTTERY_API = 'https://taiwanlottery.com';
         const NFD_URL = 'https://nfd.com.tw';
         const FILE_PATH = path.join(__dirname, '7788.js');
 
@@ -57,7 +56,7 @@ jobs:
             let targetDateStr = todayStr;
             const timeValue = hours * 100 + minutes;
 
-            // 核心時間權重：00:00 至 20:40 算昨天的帳
+            // 00:00 至 20:40 算昨天的帳
             if (timeValue < 2040) {
                 const yesterday = new Date(tzNow.getTime() - 86400000);
                 targetDateStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
@@ -65,58 +64,28 @@ jobs:
             return { targetDateStr, timeValue, dayOfWeek };
         }
 
-        function requestUrl(url) {
+        function fetchNFDHtml() {
             return new Promise((resolve, reject) => {
-                const req = https.get(new URL(url), {
+                const req = https.get(new URL(NFD_URL), {
                     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                    timeout: 10000
+                    timeout: 15000
                 }, (res) => {
-                    let data = '';
-                    res.on('data', (chunk) => { data += chunk; });
-                    res.on('end', () => resolve(data));
+                    let chunks = [];
+                    res.on('data', (chunk) => { chunks.push(chunk); });
+                    res.on('end', () => {
+                        const buffer = Buffer.concat(chunks);
+                        resolve(buffer.toString('utf-8'));
+                    });
                 });
                 req.on('error', reject);
                 req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
             });
         }
 
-        async function fetchFromTaiwanLottery(targetDateStr) {
-            try {
-                const raw = await requestUrl(TAI_WAN_LOTTERY_API);
-                const json = JSON.parse(raw);
-                if (json && json.lottoResult) {
-                    const row = json.lottoResult.find(item => item.drawDate === targetDateStr);
-                    if (row) {
-                        return { ballOrder: row.ballOrder, resultOrder: row.resultOrder };
-                    }
-                }
-            } catch (e) {
-                console.log('⚠️ 台灣彩券 API 連線或解析失敗，準備切換至備用源...');
-            }
-            return null;
-        }
-
-        async function fetchFromNFD(targetDateStr) {
-            try {
-                const html = await requestUrl(NFD_URL);
-                const cleanDate = targetDateStr.replace(/-/g, '[/\\.-]');
-                const regex = new RegExp(cleanDate + '[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})');
-                const match = html.match(regex);
-                if (match) {
-                    const nums = [match[1], match[2], match[3], match[4], match[5]];
-                    // NFD 網頁歷史紀錄通常存放順球/大小，在此將其視為通用基礎號碼
-                    return { ballOrder: nums, resultOrder: nums };
-                }
-            } catch (e) {
-                console.log('⚠️ 樂透研究院 NFD 網頁抓取失敗。');
-            }
-            return null;
-        }
-
         async function main() {
             try {
                 const { targetDateStr, timeValue, dayOfWeek } = getTaipeiDateInfo();
-                console.log(`[時間判定] 目標日期: ${targetDateStr}, 目前時間權重: ${timeValue}`);
+                console.log(`[NFD排程啟動] 目標日期: ${targetDateStr}, 目前時間權重: ${timeValue}`);
 
                 if (dayOfWeek === 0) {
                     console.log('週日休市，不執行更新。');
@@ -129,82 +98,65 @@ jobs:
                 }
                 let fileContent = fs.readFileSync(FILE_PATH, 'utf-8');
 
-                // 精準查找 7788.js 首列日期（排除任何多餘格式干擾）
                 const firstLineRegex = /\['(\d{4}-\d{2}-\d{2})'/;
                 const match = fileContent.match(firstLineRegex);
                 if (!match) {
                     console.error('無法解析 7788.js 的首列日期');
                     process.exit(0);
                 }
-                const lastUpdatedDate = match[1];
+                const lastUpdatedDate = match;
                 console.log(`7788.js 最新一列日期為: ${lastUpdatedDate}`);
 
-                // 計算日期差距
                 const d1 = new Date(targetDateStr);
                 const d2 = new Date(lastUpdatedDate);
                 const diffTime = Math.abs(d1 - d2);
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-                // 情況一：兩期以上（含兩期）未更新
+                // 情況一：兩期以上（含兩期）未更新 -> 抓 NFD 補登
                 if (diffDays >= 2 && lastUpdatedDate < targetDateStr) {
-                    console.log(`[多期未更新] 檢測到相差 ${diffDays} 天，觸發落球補登邏輯...`);
-                    const data = await fetchFromTaiwanLottery(targetDateStr) || await fetchFromNFD(targetDateStr);
-                    if (data && data.ballOrder && data.ballOrder.length === 5) {
-                        const insertText = `['${targetDateStr}',['${data.ballOrder.join("','")}']],\n`;
-                        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
-                        fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                        console.log(`✅ [多期補登] 成功插入首列落球數據！`);
-                        process.exit(0);
-                    }
-                    console.log('尚未獲取到有效的開獎數據。');
-                    process.exit(0);
-                }
-
-                // 情況二：一期未更新或需要執行落球替換
-                if (lastUpdatedDate === targetDateStr) {
-                    if (timeValue >= 2100) {
-                        console.log('[落球更新時段] 檢查是否需要執行落球替換...');
-                        const data = await fetchFromTaiwanLottery(targetDateStr);
-                        if (data && data.ballOrder && data.resultOrder) {
-                            const sortedStr = `['${targetDateStr}',['${data.resultOrder.join("','")}']]`;
-                            const ballStr = `['${targetDateStr}',['${data.ballOrder.join("','")}']]`;
-                            
-                            if (fileContent.includes(sortedStr) && !fileContent.includes(ballStr)) {
-                                fileContent = fileContent.replace(sortedStr, ballStr);
-                                fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                                console.log(`✅ [一期替換] 成功將 ${targetDateStr} 的順球替換為落球！`);
-                                process.exit(0);
-                            }
+                    console.log(`[多期未更新] 觸發 NFD 補登邏輯...`);
+                    try {
+                        const html = await fetchNFDHtml();
+                        const cleanDate = targetDateStr.replace(/-/g, '[/\\.-]');
+                        const regex = new RegExp(cleanDate + '[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})');
+                        const m = html.match(regex);
+                        if (m) {
+                            const insertText = `['${targetDateStr}',['${m[1]}','${m[2]}','${m[3]}','${m[4]}','${m[5]}']],\n`;
+                            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
+                            fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
+                            console.log(`✅ [多期補登] 成功補入 ${targetDateStr} 的數據！`);
+                            process.exit(0);
                         }
+                    } catch (e) {
+                        console.log('NFD 網頁擷取失敗。');
                     }
-                    console.log('資料已是最新狀態。');
                     process.exit(0);
                 }
 
-                // 情況三：剛好一期未更新，依據時段決定插入順球或落球
+                // 情況二：日期已最新（由一期未更新狀態成功寫入後），因純網頁無區分落球/順球，故不執行重複替換
+                if (lastUpdatedDate >= targetDateStr) {
+                    console.log('資料已是最新狀態，無需重複處理。');
+                    process.exit(0);
+                }
+
+                // 情況三：剛好一期未更新 -> 從 NFD 抓取最新一期數字並插入首列
                 if (lastUpdatedDate < targetDateStr) {
-                    const data = await fetchFromTaiwanLottery(targetDateStr) || await fetchFromNFD(targetDateStr);
-                    if (!data) {
-                        console.log('各數據源皆未更新，跳過本次排程。');
-                        process.exit(0);
-                    }
-
-                    if (timeValue >= 2040 && timeValue < 2100) {
-                        if (data.resultOrder && data.resultOrder.length === 5) {
-                            const insertText = `['${targetDateStr}',['${data.resultOrder.join("','")}']],\n`;
+                    try {
+                        const html = await fetchNFDHtml();
+                        const cleanDate = targetDateStr.replace(/-/g, '[/\\.-]');
+                        const regex = new RegExp(cleanDate + '[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})');
+                        const m = html.match(regex);
+                        if (m) {
+                            const insertText = `['${targetDateStr}',['${m[1]}','${m[2]}','${m[3]}','${m[4]}','${m[5]}']],\n`;
                             fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
                             fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                            console.log(`✅ [一期順球] 成功插入 ${targetDateStr} 順球數據！`);
+                            console.log(`✅ [一期寫入] 成功插入首列日期 ${targetDateStr} 的獎號！`);
                             process.exit(0);
+                        } else {
+                            console.log('樂透研究院 NFD 網頁尚未更新該期資料。');
                         }
-                    } else if (timeValue >= 2100) {
-                        if (data.ballOrder && data.ballOrder.length === 5) {
-                            const insertText = `['${targetDateStr}',['${data.ballOrder.join("','")}']],\n`;
-                            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
-                            fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                            console.log(`✅ [一期落球] 成功直接插入 ${targetDateStr} 落球數據！`);
-                            process.exit(0);
-                        }
+                    } catch (e) {
+                        console.log('連線樂透研究院時發生錯誤。');
                     }
                 }
 
@@ -226,7 +178,7 @@ jobs:
         git add 7788.js
         
         if ! git diff --cached --quiet; then
-          git commit -m "🤖 539 獎號排程同步 [$(date '+%Y-%m-%d %H:%M:%S')]"
+          git commit -m "🤖 NFD 539 獎號排程更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
           git push
         else
           echo "7788.js 資料內容無變動，安全跳過 Commit。"
