@@ -1,205 +1,34 @@
-name: 自動更新 7788 今彩539 獎號
+name: auto_update.yml
 
 on:
   schedule:
-    # 台北時間 20:40, 20:50 (順球)
-    - cron: '40 12 * * 1-6'
-    - cron: '50 12 * * 1-6'
-    
-    # 台北時間 21:00, 21:30, 22:00 (落球)
-    - cron: '00 13 * * 1-6'
-    - cron: '30 13 * * 1-6'
-    - cron: '00 14 * * 1-6'
-    
-  workflow_dispatch: # 允許手動點擊執行測試
+    # 順球時段
+    - cron: '40 12 * * 1-6' # 台灣時間 20:40
+    - cron: '50 12 * * 1-6' # 台灣時間 20:50
+    # 落球時段
+    - cron: '0 13 * * 1-6'  # 台灣時間 21:00
+    - cron: '30 13 * * 1-6' # 台灣時間 21:30
+    - cron: '0 14 * * 1-6'  # 台灣時間 22:00
+  workflow_dispatch:
 
 jobs:
-  update-lotto:
+  update-data:
     runs-on: ubuntu-latest
-
     steps:
-    - name: 1. 檢查出專案程式碼
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: 2. 設定 Node.js 環境
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    - name: 3. 建立並執行獨立更新腳本
-      run: |
-        rm -f update.js
+      - name: Run update script
+        run: node update.js
 
-        cat << 'EOF' > update.js
-        const https = require('https');
-        const fs = require('fs');
-        const path = require('path');
-
-        // 改用真實存在且絕不鎖海外 IP 的彩券公共數據庫節點
-        const REAL_API_URL = 'https://githubusercontent.com';
-        const FILE_PATH = path.join(__dirname, '7788.js');
-
-        function getTaipeiDateInfo() {
-            const now = new Date();
-            const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-            const tzNow = new Date(utc + (3600000 * 8));
-            
-            const year = tzNow.getFullYear();
-            const month = String(tzNow.getMonth() + 1).padStart(2, '0');
-            const date = String(tzNow.getDate()).padStart(2, '0');
-            const hours = tzNow.getHours();
-            const minutes = tzNow.getMinutes();
-            
-            const todayStr = `${year}-${month}-${date}`;
-            const dayOfWeek = tzNow.getDay();
-
-            let targetDateStr = todayStr;
-            const timeValue = hours * 100 + minutes;
-
-            // 20:40 以前算昨天的開獎期數
-            if (timeValue < 2040) {
-                const yesterday = new Date(tzNow.getTime() - 86400000);
-                targetDateStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-            }
-            return { targetDateStr, timeValue, dayOfWeek };
-        }
-
-        function fetchLottoData() {
-            return new Promise((resolve, reject) => {
-                https.get(REAL_API_URL, {
-                    headers: { 'User-Agent': 'Mozilla/5.0' },
-                    timeout: 15000
-                }, (res) => {
-                    let data = '';
-                    res.on('data', (chunk) => { data += chunk; });
-                    res.on('end', () => {
-                        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
-                    });
-                }).on('error', reject);
-            });
-        }
-
-        async function main() {
-            try {
-                const { targetDateStr, timeValue, dayOfWeek } = getTaipeiDateInfo();
-                console.log(`【排程啟動】今天台北時間判定目標日期為: ${targetDateStr}`);
-
-                if (dayOfWeek === 0) {
-                    console.log('週日休市，跳過。');
-                    process.exit(0);
-                }
-
-                if (!fs.existsSync(FILE_PATH)) {
-                    console.error('找不到 7788.js 檔案！');
-                    process.exit(0);
-                }
-                let fileContent = fs.readFileSync(FILE_PATH, 'utf-8');
-
-                // 精準抓取 7788.js 現有的第一筆日期
-                const firstLineRegex = /\['(\d{4}-\d{2}-\d{2})'/;
-                const match = fileContent.match(firstLineRegex);
-                if (!match) {
-                    console.error('無法解析 7788.js 的首列日期');
-                    process.exit(0);
-                }
-                const lastUpdatedDate = match[1];
-                console.log(`7788.js 目前最新日期為: ${lastUpdatedDate}`);
-
-                console.log('正在從公共開獎資料庫下載數據...');
-                const apiData = await fetchLottoData();
-                
-                if (!apiData || !apiData.records) {
-                    console.error('資料庫格式異常');
-                    process.exit(0);
-                }
-
-                // 整理資料庫裡的歷史紀錄
-                let webRecords = {};
-                apiData.records.forEach(item => {
-                    webRecords[item.date] = {
-                        ballOrder: item.ball_order, // 落球數組
-                        sortOrder: item.sort_order  // 順球數組
-                    };
-                });
-
-                const targetData = webRecords[targetDateStr];
-                const d1 = new Date(targetDateStr);
-                const d2 = new Date(lastUpdatedDate);
-                const diffDays = Math.ceil(Math.abs(d1 - d2) / (1000 * 60 * 60 * 24));
-
-                // 【兩期以上未更新】
-                if (diffDays >= 2 && lastUpdatedDate < targetDateStr) {
-                    console.log(`[多期補登] 相差 ${diffDays} 天，執行落球補登...`);
-                    let insertText = '';
-                    for (let d = new Date(d2.getTime() + 86400000); d <= d1; d.setDate(d.getDate() + 1)) {
-                        const checkStr = d.toISOString().split('T')[0];
-                        if (webRecords[checkStr]) {
-                            const row = webRecords[checkStr];
-                            insertText += `['${checkStr}',['${row.ballOrder.join("','")}']],\n`;
-                        }
-                    }
-                    if (insertText) {
-                        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
-                        fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                        console.log('✅ [多期補登成功] 資料已寫入 7788.js');
-                    }
-                    process.exit(0);
-                }
-
-                // 【一期未更新】且【首列日期相同 -> 執行落球替換】
-                if (lastUpdatedDate === targetDateStr && timeValue >= 2100) {
-                    if (targetData) {
-                        const sortedStr = `['${targetDateStr}',['${targetData.sortOrder.join("','")}']]`;
-                        const ballStr = `['${targetDateStr}',['${targetData.ballOrder.join("','")}']]`;
-                        
-                        if (fileContent.includes(sortedStr)) {
-                            fileContent = fileContent.replace(sortedStr, ballStr);
-                            fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                            console.log(`✅ [一期替換成功] 順球已成功替換為落球！`);
-                            process.exit(0);
-                        }
-                    }
-                    console.log('資料已是最新，無需重複替換。');
-                    process.exit(0);
-                }
-
-                // 【一期未更新】且【首列日期較舊 -> 執行新期別插入】
-                if (lastUpdatedDate < targetDateStr && targetData) {
-                    if (timeValue >= 2040 && timeValue < 2100) {
-                        const insertText = `['${targetDateStr}',['${targetData.sortOrder.join("','")}']],\n`;
-                        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
-                        fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                        console.log(`✅ [一期順球成功] 已插入首列順球數據！`);
-                    } else if (timeValue >= 2100) {
-                        const insertText = `['${targetDateStr}',['${targetData.ballOrder.join("','")}']],\n`;
-                        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
-                        fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                        console.log(`✅ [一期落球成功] 已插入首列落球數據！`);
-                    }
-                    process.exit(0);
-                }
-
-                console.log('目前資料庫尚未釋出最新期別數據，等待下一次排程。');
-                process.exit(0);
-            } catch (err) {
-                console.error('嚴重錯誤:', err.message);
-                process.exit(0);
-            }
-        }
-        main();
-        EOF
-        
-        node update.js
-
-    - name: 4. 檢查檔案變動並自動提交
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add 7788.js
-        
-        if ! git diff --cached --quiet; then
-          git commit -m "🤖 獎號同步更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
-          git push
-        else
-          echo "無變動，跳過 Commit。"
-        fi
+      - name: Commit and push if changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add 7788.js
+          git diff --quiet && git diff --cached --quiet || (git commit -m "Auto-update 7788.js via GitHub Actions" && git push)
