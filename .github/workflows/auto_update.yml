@@ -2,7 +2,7 @@ name: 自動更新 7788 今彩539 獎號
 
 on:
   schedule:
-    # 每天晚上 20:45 至 23:45，每 15 分鐘自動執行一次，抓取最新開獎
+    # 每天晚上 20:45 至 23:45，每 15 分鐘自動執行一次
     - cron: '45 12 * * 1-6'
     - cron: '00 13 * * 1-6'
     - cron: '15 13 * * 1-6'
@@ -26,7 +26,7 @@ jobs:
       with:
         node-version: '20'
 
-    - name: 3. 建立並執行網頁文字精準查找腳本
+    - name: 3. 建立並執行網頁原始碼精準解析腳本
       run: |
         rm -f update.js
         rm -f update_pure.js
@@ -56,8 +56,7 @@ jobs:
                     res.on('data', (chunk) => { chunks.push(chunk); });
                     res.on('end', () => {
                         const buffer = Buffer.concat(chunks);
-                        // 樂透研究院是舊型網頁，直接轉成 ascii/binary 排除中文字干擾，純抓數字與斜線
-                        resolve(buffer.toString('binary'));
+                        resolve(buffer.toString('utf-8'));
                     });
                 });
                 req.on('error', reject);
@@ -82,7 +81,7 @@ jobs:
                     console.error('無法解析 7788.js 的首列日期');
                     process.exit(0);
                 }
-                const lastUpdatedDate = match[1];
+                const lastUpdatedDate = match;
                 console.log(`7788.js 檔案內最新的一列日期為: ${lastUpdatedDate}`);
 
                 if (lastUpdatedDate >= todayStr) {
@@ -90,45 +89,46 @@ jobs:
                     process.exit(0);
                 }
 
-                console.log(`偵測到未更新！開始下載樂透研究院全頁原始碼...`);
+                console.log(`偵測到未更新！開始精準抓取網頁表格特徵...`);
                 const html = await fetchNFDHtml();
 
-                // 移除網頁中所有干擾的空格、換行、逗號、HTML標籤，全部壓平成純文字
-                const cleanText = html.replace(/<[^>]*>/g, '').replace(/[\s,]+/g, '');
-
-                // NFD 網頁特徵：西元日期通常會寫成像 2026/10/29 或 2026-10-29
-                // 我們用靈活的正則表達式，自動比對「年/月/日」或「月/日」後面的 5 組雙位數
-                const recordRegex = /(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})([0-3]\d)([0-3]\d)([0-3]\d)([0-3]\d)([0-3]\d)/g;
+                // 根據您提供的 HTML 結構，設計完美的正則表達式
+                // 1. 抓取日期：color="#000080">YYYY-MM-DD
+                // 2. 抓取順球(紅色字體)：color="#FF0000">XX&nbsp;XX&nbsp;XX&nbsp;XX&nbsp;XX
+                const rowRegex = /color="#000080">(\d{4}-\d{2}-\d{2})[\s\S]*?color="#FF0000">(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})/g;
                 
                 let foundRows = [];
                 let regexMatch;
 
-                while ((regexMatch = recordRegex.exec(cleanText)) !== null) {
-                    const formattedDate = `${regexMatch[1]}-${regexMatch[2].padStart(2, '0')}-${regexMatch[3].padStart(2, '0')}`;
+                while ((regexMatch = rowRegex.exec(html)) !== null) {
+                    const formattedDate = regexMatch;
                     
+                    // 只要網頁日期大於檔案日期，且不大於今天，通通抓下來
                     if (formattedDate > lastUpdatedDate && formattedDate <= todayStr) {
-                        const nums = [regexMatch[4], regexMatch[5], regexMatch[6], regexMatch[7], regexMatch[8]];
+                        const nums = [regexMatch, regexMatch, regexMatch, regexMatch, regexMatch];
                         foundRows.push({ date: formattedDate, numbers: nums });
                     }
                 }
 
                 if (foundRows.length === 0) {
-                    console.log('⚠️ 暴力解析依舊未抓到對應日期的連續數字，可能網頁格式有變，先跳過。');
+                    console.log('⚠️ 網頁原始碼中尚未搜尋到符合條件的新期別，先跳過。');
                     process.exit(0);
                 }
 
+                // 依照日期由舊到新排序
                 foundRows.sort((a, b) => a.date.localeCompare(b.date));
 
                 let insertText = '';
                 foundRows.forEach(row => {
+                    // 嚴格遵循格式，完全沒有空格
                     insertText += `['${row.date}',['${row.numbers.join("','")}']],\n`;
-                    console.log(`成功解析到未更新期數: ${row.date} -> ${row.numbers.join(',')}`);
+                    console.log(`精準抓取成功！準備補登: ${row.date} -> 順球: ${row.numbers.join(',')}`);
                 });
 
                 if (insertText) {
                     fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
                     fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                    console.log('✅ 未更新的缺失期數已全部補齊，成功寫入 7788.js！');
+                    console.log('✅ 未更新的缺失期數已根據 NFD 表格成功全部補齊！');
                 }
 
                 process.exit(0);
@@ -149,7 +149,7 @@ jobs:
         git add 7788.js
         
         if ! git diff --cached --quiet; then
-          git commit -m "🤖 自動補登樂透研究院最新獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
+          git commit -m "🤖 精準補登 NFD 最新順球獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
           git push
         else
           echo "7788.js 資料無變動，安全跳過 Commit。"
