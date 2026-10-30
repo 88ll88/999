@@ -1,73 +1,113 @@
 const fs = require('fs');
-const axios = require('axios');
-const cheerio = require('cheerio');
+const https = require('https');
 
-// 設定資料檔名 (例如 zzz.js 或 ddd.js)
-const DATA_FILE = './zzz.js';
+// 設定 GitHub REST API 相關參數 (環境變數傳入)
+const GITHUB_TOKEN = process.env.GH_PAT;
+const REPO_OWNER = '88ll88';
+const REPO_NAME = '999';
+const FILE_PATH = '7788.js';
 
-async function fetchLatest539() {
-  try {
-    // 範例：從第三方資料源抓取 HTML 解析（可依實際目標網址調整 CSS selector）
-    const response = await axios.get('https://9800.com.tw/lotto539/', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      }
-    });
+// 計算目標日期 (20:35~24:00為今天，00:00~20:35為昨天)
+function getTargetDate() {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const taiwanTime = new Date(utc + (3600000 * 8)); // 轉台灣時間 UTC+8
 
-    const $ = cheerio.load(response.data);
-    
-    // 假設抓取最新一期的日期與號碼（請依目標網頁結構調整 CSS Selector）
-    const latestDate = $('.draw-date').first().text().trim(); // 例: "2026-10-30"
-    const numbersText = $('.draw-numbers').first().text().trim(); // 例: "05, 12, 19, 23, 38"
-    
-    if (!latestDate || !numbersText) {
-      console.log('未抓取到有效資料，請檢查 Selector');
-      return null;
-    }
+  const hours = taiwanTime.getHours();
+  const minutes = taiwanTime.getMinutes();
+  const timeNum = hours * 100 + minutes;
 
-    const numbers = numbersText.split(',').map(n => n.trim().padStart(2, '0'));
-
-    return {
-      date: latestDate,
-      numbers: numbers // 順球或落球陣列
-    };
-  } catch (error) {
-    console.error('抓取資料失敗:', error.message);
-    return null;
+  if (timeNum < 2035) {
+    taiwanTime.setDate(taiwanTime.getDate() - 1);
   }
+
+  const yyyy = taiwanTime.getFullYear();
+  const mm = String(taiwanTime.getMonth() + 1).padStart(2, '0');
+  const dd = String(taiwanTime.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-async function updateData() {
-  const latestData = await fetchLatest539();
-  if (!latestData) return;
+// 通用 HTTP GET Request 封裝
+function fetchUrl(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
+  });
+}
 
-  // 讀取現有 JS 資料檔
-  let currentContent = '';
-  if (fs.existsSync(DATA_FILE)) {
-    currentContent = fs.readFileSync(DATA_FILE, 'utf-8');
+// 爬取今彩539開獎號碼 (落球與順球)
+async function fetchDrawData(targetDate) {
+  try {
+    const html = await fetchUrl('https://pilio.idv.tw/lto539/');
+    
+    // 正則表達式抓取當日開獎落球與順球
+    const regex = new RegExp(targetDate + '[\\s\\S]*?落球[\\s\\S]*?([0-9]{2}),\\s*([0-9]{2}),\\s*([0-9]{2}),\\s*([0-9]{2}),\\s*([0-9]{2})');
+    const match = html.match(regex);
+
+    if (match) {
+      const dropBalls = [match[1], match[2], match[3], match[4], match[5]];
+      const orderBalls = [...dropBalls].sort((a, b) => parseInt(a) - parseInt(b));
+      return { dropBalls, orderBalls };
+    }
+  } catch (e) {
+    console.error('爬取失敗:', e);
   }
+  return null;
+}
 
-  // 判斷是否已經存在最新日期，避免重複寫入
-  if (currentContent.includes(latestData.date)) {
-    console.log(`[${latestData.date}] 資料已是最新，無需更新。`);
+// 讀取本地 7788.js
+function read7788() {
+  const content = fs.readFileSync(FILE_PATH, 'utf-8');
+  const jsonStr = content.replace(/^var\s+7788\s*=\s*/, '').replace(/;\s*$/, '');
+  const data = JSON.parse(jsonStr.replace(/'/g, '"'));
+  return { content, data };
+}
+
+// 寫入本地 7788.js
+function write7788(data) {
+  const formatted = 'var 7788=\n' + JSON.stringify(data, null, 2).replace(/"/g, "'") + ';\n';
+  fs.writeFileSync(FILE_PATH, formatted, 'utf-8');
+  return formatted;
+}
+
+// 主執行流程
+async function run() {
+  const targetDate = getTargetDate();
+  const { data } = read7788();
+  const topRow = data[0]; // [日期, [號碼×5]]
+  const topDate = topRow[0];
+
+  console.log(`目標日期: ${targetDate}, 7788.js 首列日期: ${topDate}`);
+
+  const drawInfo = await fetchDrawData(targetDate);
+  if (!drawInfo) {
+    console.log('尚未獲取到開獎數據');
     return;
   }
 
-  console.log(`發現新開獎資料 [${latestData.date}]:`, latestData.numbers);
+  let updated = false;
 
-  // 格式化新資料並追加/更新至檔案
-  // 假設檔案格式為 var lottoData = [...]; 或純 JSON 陣列
-  const newEntry = `  { "date": "${latestData.date}", "numbers": [${latestData.numbers.map(n => `"${n}"`).join(', ')}] },\n`;
-
-  // 簡易寫入示範（若寫入 .js 檔頭，可根據你的變數宣告格式調整）
-  if (currentContent.includes('[')) {
-    const updatedContent = currentContent.replace('[', '[\n' + newEntry);
-    fs.writeFileSync(DATA_FILE, updatedContent, 'utf-8');
+  if (topDate !== targetDate) {
+    // 首列未更新：先插入順球數據
+    console.log(`插入 ${targetDate} 順球號碼...`);
+    data.unshift([targetDate, drawInfo.orderBalls]);
+    updated = true;
+  } else if (JSON.stringify(topRow[1]) !== JSON.stringify(drawInfo.dropBalls)) {
+    // 首列日期已相等，但尚未替換為落球數據：替換首列為落球
+    console.log(`替換 ${targetDate} 首列為落球號碼...`);
+    data[0] = [targetDate, drawInfo.dropBalls];
+    updated = true;
   } else {
-    fs.writeFileSync(DATA_FILE, `var lottoData = [\n${newEntry}];`, 'utf-8');
+    console.log('首列已是最新落球數據，無需更新');
   }
 
-  console.log('檔案更新成功！');
+  if (updated) {
+    write7788(data);
+    console.log('7788.js 本地更新完畢');
+  }
 }
 
-updateData();
+run();
