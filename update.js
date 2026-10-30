@@ -1,74 +1,7 @@
-const fs = require('fs');
-const https = require('https');
-
-const FILE_PATH = '7788.js';
-
-function getTargetDate() {
-  const now = new Date();
-  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-  const taiwanTime = new Date(utc + (3600000 * 8));
-
-  const hours = taiwanTime.getHours();
-  const minutes = taiwanTime.getMinutes();
-  const timeNum = hours * 100 + minutes;
-
-  // 00:00 至 20:35 已開獎日期歸為昨天
-  if (timeNum < 2035) {
-    taiwanTime.setDate(taiwanTime.getDate() - 1);
-  }
-
-  const yyyy = taiwanTime.getFullYear();
-  const mm = String(taiwanTime.getMonth() + 1).padStart(2, '0');
-  const dd = String(taiwanTime.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function fetchUrl(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve(data));
-    }).on('error', reject);
-  });
-}
-
-async function fetchDrawData(targetDate) {
-  try {
-    const html = await fetchUrl('https://pilio.idv.tw/lto539/');
-    
-    // 尋找包含目標日期的行，並精準抓取後方緊接著的 5 個兩位數開獎號碼
-    const escapedDate = targetDate.replace(/-/g, '[-/]');
-    const regex = new RegExp(escapedDate + '[\\s\\S]*?<td>([0-9]{2})</td>[\\s\\S]*?<td>([0-9]{2})</td>[\\s\\S]*?<td>([0-9]{2})</td>[\\s\\S]*?<td>([0-9]{2})</td>[\\s\\S]*?<td>([0-9]{2})</td>');
-    
-    const match = html.match(regex);
-    if (match) {
-      const dropBalls = [match[1], match[2], match[3], match[4], match[5]]; // 落球
-      const orderBalls = [...dropBalls].sort((a, b) => parseInt(a) - parseInt(b)); // 順球 (從小到大)
-      return { dropBalls, orderBalls };
-    }
-  } catch (e) {
-    console.error('爬取失敗:', e);
-  }
-  return null;
-}
-
-function read7788() {
-  const content = fs.readFileSync(FILE_PATH, 'utf-8');
-  const jsonStr = content.replace(/^var\s+7788\s*=\s*/, '').replace(/;\s*$/, '');
-  const data = JSON.parse(jsonStr.replace(/'/g, '"'));
-  return { data };
-}
-
-function write7788(data) {
-  const formatted = 'var 7788 =\n' + JSON.stringify(data, null, 2).replace(/"/g, "'") + ';\n';
-  fs.writeFileSync(FILE_PATH, formatted, 'utf-8');
-}
-
 async function run() {
   const targetDate = getTargetDate();
   const { data } = read7788();
-  const topRow = data[0];
+  const topRow = data[0]; // 取得目前首列 [日期, [號碼]]
   const topDate = topRow[0];
 
   console.log(`目標日期: ${targetDate}, 7788.js 首列日期: ${topDate}`);
@@ -81,27 +14,25 @@ async function run() {
 
   let updated = false;
 
-  // 情況 A：首列日期小於目標日期（例如首列 28 號，目標 29 號）-> 插入順球
+  // 1. 首列插入：若首列日期小於目標日期，代表今天還沒記錄，直接在首列插入順球
   if (topDate < targetDate) {
-    console.log(`[插入] 首列日期 ${topDate} 小於目標 ${targetDate}，插入順球：`, drawInfo.orderBalls);
+    console.log(`[首列插入] 插入 ${targetDate} 順球：`, drawInfo.orderBalls);
     data.unshift([targetDate, drawInfo.orderBalls]);
     updated = true;
   }
-  // 情況 B：首列日期已經是目標日期，但內容還不是落球格式 -> 替換為落球
+  // 2. 首列替換：若首列日期已經是目標日期，但內容還不是落球，直接替換首列為落球
   else if (topDate === targetDate) {
     if (JSON.stringify(topRow[1]) !== JSON.stringify(drawInfo.dropBalls)) {
-      console.log(`[替換] 首列日期相符，將內容替換為落球：`, drawInfo.dropBalls);
+      console.log(`[首列替換] 將首列替換為落球：`, drawInfo.dropBalls);
       data[0] = [targetDate, drawInfo.dropBalls];
       updated = true;
     } else {
-      console.log('首列已經是最新落球數據，無需更新');
+      console.log('首列已經是最新落球數據，無需變更');
     }
   }
 
   if (updated) {
     write7788(data);
-    console.log('7788.js 更新寫入完成');
+    console.log('7788.js 更新完成');
   }
 }
-
-run();
