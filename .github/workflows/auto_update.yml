@@ -26,7 +26,7 @@ jobs:
       with:
         node-version: '20'
 
-    - name: 3. 建立並執行未更新期數查找腳本
+    - name: 3. 建立並執行網頁文字精準查找腳本
       run: |
         rm -f update.js
         rm -f update_pure.js
@@ -39,7 +39,6 @@ jobs:
         const NFD_URL = 'https://nfd.com.tw';
         const FILE_PATH = path.join(__dirname, '7788.js');
 
-        // 取得台北時間今天的標準日期 (YYYY-MM-DD)
         function getTaipeiTodayStr() {
             const now = new Date();
             const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
@@ -57,7 +56,8 @@ jobs:
                     res.on('data', (chunk) => { chunks.push(chunk); });
                     res.on('end', () => {
                         const buffer = Buffer.concat(chunks);
-                        resolve(buffer.toString('utf-8'));
+                        // 樂透研究院是舊型網頁，直接轉成 ascii/binary 排除中文字干擾，純抓數字與斜線
+                        resolve(buffer.toString('binary'));
                     });
                 });
                 req.on('error', reject);
@@ -76,7 +76,6 @@ jobs:
                 }
                 let fileContent = fs.readFileSync(FILE_PATH, 'utf-8');
 
-                // 精準抓取 7788.js 目前的首列日期
                 const firstLineRegex = /\['(\d{4}-\d{2}-\d{2})'/;
                 const match = fileContent.match(firstLineRegex);
                 if (!match) {
@@ -86,25 +85,27 @@ jobs:
                 const lastUpdatedDate = match[1];
                 console.log(`7788.js 檔案內最新的一列日期為: ${lastUpdatedDate}`);
 
-                // 如果檔案日期已經大於或等於今天，代表完全沒有未更新的期數
                 if (lastUpdatedDate >= todayStr) {
-                    console.log('🎉 檔案資料已是最新，沒有未更新的期數，結束排程。');
+                    console.log('🎉 檔案資料已是最新，沒有任何未更新的期數。');
                     process.exit(0);
                 }
 
-                console.log(`偵測到未更新！開始從樂透研究院網頁查找大於 ${lastUpdatedDate} 的獎號...`);
+                console.log(`偵測到未更新！開始下載樂透研究院全頁原始碼...`);
                 const html = await fetchNFDHtml();
 
-                // 樂透研究院今彩539歷史網頁的特徵是：日期後面會依序出現 5 個號碼
-                // 我們用正則表達式把網頁裡所有的歷史紀錄一次撈出來
-                const recordRegex = /(\d{4})[/\.-](\d{2})[/\.-](\d{2})[\s\\S]*?(\d{2})[\s\\S]*?(\d{2})[\s\\S]*?(\d{2})[\s\\S]*?(\d{2})[\s\\S]*?(\d{2})/g;
+                // 移除網頁中所有干擾的空格、換行、逗號、HTML標籤，全部壓平成純文字
+                const cleanText = html.replace(/<[^>]*>/g, '').replace(/[\s,]+/g, '');
+
+                // NFD 網頁特徵：西元日期通常會寫成像 2026/10/29 或 2026-10-29
+                // 我們用靈活的正則表達式，自動比對「年/月/日」或「月/日」後面的 5 組雙位數
+                const recordRegex = /(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})([0-3]\d)([0-3]\d)([0-3]\d)([0-3]\d)([0-3]\d)/g;
+                
                 let foundRows = [];
                 let regexMatch;
 
-                while ((regexMatch = recordRegex.exec(html)) !== null) {
-                    const formattedDate = `${regexMatch[1]}-${regexMatch[2]}-${regexMatch[3]}`;
+                while ((regexMatch = recordRegex.exec(cleanText)) !== null) {
+                    const formattedDate = `${regexMatch[1]}-${regexMatch[2].padStart(2, '0')}-${regexMatch[3].padStart(2, '0')}`;
                     
-                    // 只要網頁上的日期比我們檔案裡的日期新，且不大於今天，就是我們漏掉需要補的！
                     if (formattedDate > lastUpdatedDate && formattedDate <= todayStr) {
                         const nums = [regexMatch[4], regexMatch[5], regexMatch[6], regexMatch[7], regexMatch[8]];
                         foundRows.push({ date: formattedDate, numbers: nums });
@@ -112,25 +113,22 @@ jobs:
                 }
 
                 if (foundRows.length === 0) {
-                    console.log('⚠️ 樂透研究院網頁上尚未更新最新一期的文字，先跳過本次查找。');
+                    console.log('⚠️ 暴力解析依舊未抓到對應日期的連續數字，可能網頁格式有變，先跳過。');
                     process.exit(0);
                 }
 
-                // 將抓到的未更新期數，依照日期由舊到新排序，確保插入順序正確
                 foundRows.sort((a, b) => a.date.localeCompare(b.date));
 
                 let insertText = '';
                 foundRows.forEach(row => {
-                    // 完全遵循規格，絕對不留空格
                     insertText += `['${row.date}',['${row.numbers.join("','")}']],\n`;
-                    console.log(`發現未更新期數，準備補登: ${row.date} -> ${row.numbers.join(',')}`);
+                    console.log(`成功解析到未更新期數: ${row.date} -> ${row.numbers.join(',')}`);
                 });
 
                 if (insertText) {
-                    // 把整理好的多期或單期新內容，直接塞進 var 7788 = [ 的下一行
                     fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
                     fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                    console.log('✅ 缺失的期數已成功全部補齊寫入 7788.js！');
+                    console.log('✅ 未更新的缺失期數已全部補齊，成功寫入 7788.js！');
                 }
 
                 process.exit(0);
@@ -151,8 +149,8 @@ jobs:
         git add 7788.js
         
         if ! git diff --cached --quiet; then
-          git commit -m "🤖 自動補登缺失獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
+          git commit -m "🤖 自動補登樂透研究院最新獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
           git push
         else
-          echo "7788.js 資料無變動，跳過 Commit。"
+          echo "7788.js 資料無變動，安全跳過 Commit。"
         fi
