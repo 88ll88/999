@@ -25,14 +25,12 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        
+
     - name: 建立並執行最新的更新腳本
       run: |
-        # 1. 關鍵核心：在執行前，強行把專案目錄內可能殘留的舊 update.js 刪除
         rm -f update.js
         rm -f update_pure.js
 
-        # 2. 現場寫入全新且網址正確的 update.js
         cat << 'EOF' > update.js
         const https = require('https');
         const fs = require('fs');
@@ -101,13 +99,14 @@ jobs:
                 }
                 let fileContent = fs.readFileSync(FILE_PATH, 'utf-8');
 
-                const firstLineRegex = /\['(\d{4}-\d{2}-\d{2})',\[/;
+                // 修正後的精準日期正則表達式
+                const firstLineRegex = /\['(\d{4}-\d{2}-\d{2})'/;
                 const match = fileContent.match(firstLineRegex);
                 if (!match) {
                     console.error('無法解析 7788.js 的首列日期');
                     process.exit(0);
                 }
-                const lastUpdatedDate = match;
+                const lastUpdatedDate = match[1];
                 console.log(`7788.js 最新一列日期為: ${lastUpdatedDate}`);
 
                 if (lastUpdatedDate >= targetDateStr) {
@@ -173,7 +172,7 @@ jobs:
                         process.exit(0);
                     }
                 } else if (missingRows.length === 1) {
-                    const row = missingRows;
+                    const row = missingRows[0];
                     if (timeValue >= 2040 && timeValue < 2100) {
                         if (row.resultOrder && row.resultOrder.length === 5) {
                             const insertText = `['${row.drawDate}',['${row.resultOrder.join("','")}']],\n`;
@@ -187,7 +186,7 @@ jobs:
                             const insertText = `['${row.drawDate}',['${row.ballOrder.join("','")}']],\n`;
                             fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
                             fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                            console.log(`✅ [一期落球] 成功直接插入 ${row.drawDate} 落球號碼！`);
+                            console.log(`✅ [一期落球] 開獎日為: ${row.drawDate}，成功直接插入落球號碼！`);
                             process.exit(0);
                         }
                     }
@@ -202,7 +201,6 @@ jobs:
         main();
         EOF
         
-        # 3. 執行剛剛現場覆蓋產出的 update.js
         node update.js
 
     - name: 檢查檔案是否有變動並提交回 GitHub
@@ -217,8 +215,3 @@ jobs:
         else
           echo "7788.js 沒有任何變動，跳過 Commit。"
         fi
-      
-
-
-
-        
