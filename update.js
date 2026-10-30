@@ -1,86 +1,47 @@
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const targetFilePath = path.join(__dirname, '7788.js');
+const API_URL = 'https://taiwanlottery.com';
+const OUTPUT_FILE = path.join(__dirname, 'daily_cash_result.json');
 
-// 依時間判定目標日期 (20:35~24:00 為今天，00:00~20:35 為昨天)
-function getTargetDate() {
-    const now = new Date();
-    const hours = now.getHours();
-    const minutes = now.getMinutes();
-    const timeVal = hours * 100 + minutes;
+console.log('正在從台灣彩券擷取最新資料...');
 
-    let target = new Date();
-    if (timeVal < 2035) {
-        target.setDate(target.getDate() - 1);
+https.get(API_URL, {
+    headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
-    return target.toISOString().split('T')[0];
-}
+}, (res) => {
+    let data = '';
 
-async function runAutoUpdate() {
-    console.log('🚀 開始執行 7788.js 安全更新邏輯...');
+    res.on('data', (chunk) => { data += chunk; });
 
-    try {
-        const targetDate = getTargetDate();
-        console.log(`📅 判定目標日期：${targetDate}`);
+    res.on('end', () => {
+        try {
+            const json = JSON.parse(data);
+            if (json && json.lottoResult) {
+                // 整理成乾淨的 JSON 結構
+                const formattedData = json.lottoResult.map(item => ({
+                    period: item.period,
+                    drawDate: item.drawDate,
+                    numbers: item.resultOrder,
+                    salesAmount: item.salesAmount,
+                    categories: {
+                        grandPrize: { winners: item.g1Winner, prize: item.g1Prize },
+                        secondPrize: { winners: item.g2Winner, prize: item.g2Prize }
+                    }
+                }));
 
-        // 模擬抓到的號碼
-        const fetchedOrder = ['03', '09', '18', '27', '35']; // 順球×5
-        const fetchedDrop = ['18', '03', '27', '09', '35'];  // 落球×5
-
-        if (!fs.existsSync(targetFilePath)) {
-            throw new Error('找不到 7788.js 檔案！');
-        }
-
-        const fileContent = fs.readFileSync(targetFilePath, 'utf8');
-        
-        // 嚴格解析：把 var ddd = 裡面的內容抓出來
-        const match = fileContent.match(/var\s+ddd\s*=\s*(\[[\s\S]*\]);?/);
-        if (!match || !match[1]) {
-            throw new Error('嚴重錯誤：無法安全解析現有 7788.js 格式，為防洗掉資料，中止執行！');
-        }
-
-        let existingArray = JSON.parse(match[1]);
-        if (!Array.isArray(existingArray)) {
-            throw new Error('現有資料不是陣列格式，中止執行！');
-        }
-
-        console.log(`✅ 成功載入舊資料，目前共有 ${existingArray.length} 筆歷史紀錄。`);
-
-        // 檢查首列是否已是目標日期
-        const topRow = existingArray.length > 0 ? existingArray[0] : null;
-        const isTopRowToday = topRow && topRow[0] === targetDate;
-
-        let updated = false;
-
-        if (!isTopRowToday) {
-            // 【順球】：首列不是目標日期，插入新首列，其餘舊資料全部往後排
-            if (fetchedOrder && fetchedOrder.length === 5) {
-                existingArray.unshift([targetDate, fetchedOrder]);
-                console.log(`✅ [順球] 成功將 ${targetDate} 插入首列，舊資料完美保留！`);
-                updated = true;
+                fs.writeFileSync(OUTPUT_FILE, JSON.stringify(formattedData, null, 2), 'utf-8');
+                console.log('✅ 資料更新成功，已寫入 daily_cash_result.json');
+            } else {
+                console.error('❌ 官方 API 資料格式改變');
             }
-        } else {
-            // 【落球】：首列已經是目標日期，直接原地替換成落球
-            if (fetchedDrop && fetchedDrop.length === 5) {
-                existingArray[0] = [targetDate, fetchedDrop];
-                console.log(`✅ [落球] 首列已順利由順球替換為落球！`);
-                updated = true;
-            }
+        } catch (e) {
+            console.error('❌ 解析 JSON 失敗:', e.message);
         }
+    });
 
-        if (updated) {
-            const outputContent = `var ddd = ${JSON.stringify(existingArray, null, 4)};\n`;
-            fs.writeFileSync(targetFilePath, outputContent, 'utf8');
-            console.log('✅ 7788.js 安全寫入完成！');
-        } else {
-            console.log('ℹ️ 無需更新。');
-        }
-
-    } catch (error) {
-        console.error('❌ 執行失敗:', error.message);
-        process.exit(1);
-    }
-}
-
-runAutoUpdate();
+}).on('error', (err) => {
+    console.error('❌ 網路請求失敗:', err.message);
+});
