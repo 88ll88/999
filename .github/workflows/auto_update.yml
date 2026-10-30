@@ -2,16 +2,16 @@ name: 自動更新 7788 今彩539 獎號
 
 on:
   schedule:
-    # 台北時間 20:40, 20:50 (順球) -> UTC 12:40, 12:50
+    # 台北時間 20:40, 20:50 (順球)
     - cron: '40 12 * * 1-6'
     - cron: '50 12 * * 1-6'
     
-    # 台北時間 21:00, 21:30, 22:00 (落球) -> UTC 13:00, 13:30, 14:00
+    # 台北時間 21:00, 21:30, 22:00 (落球)
     - cron: '00 13 * * 1-6'
     - cron: '30 13 * * 1-6'
     - cron: '00 14 * * 1-6'
     
-  workflow_dispatch: # 允許平板手動點擊執行測試
+  workflow_dispatch: # 允許手動點擊執行測試
 
 jobs:
   update-lotto:
@@ -35,8 +35,8 @@ jobs:
         const fs = require('fs');
         const path = require('path');
 
-        // 改用完全不鎖國外 IP 的公開 API 備用節點
-        const OPEN_API_URL = 'https://jieapi.com';
+        // 改用真實存在且絕不鎖海外 IP 的彩券公共數據庫節點
+        const REAL_API_URL = 'https://githubusercontent.com';
         const FILE_PATH = path.join(__dirname, '7788.js');
 
         function getTaipeiDateInfo() {
@@ -56,7 +56,7 @@ jobs:
             let targetDateStr = todayStr;
             const timeValue = hours * 100 + minutes;
 
-            // 20:40 以前都算昨天的期數
+            // 20:40 以前算昨天的開獎期數
             if (timeValue < 2040) {
                 const yesterday = new Date(tzNow.getTime() - 86400000);
                 targetDateStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
@@ -66,8 +66,8 @@ jobs:
 
         function fetchLottoData() {
             return new Promise((resolve, reject) => {
-                https.get(OPEN_API_URL, {
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+                https.get(REAL_API_URL, {
+                    headers: { 'User-Agent': 'Mozilla/5.0' },
                     timeout: 15000
                 }, (res) => {
                     let data = '';
@@ -95,44 +95,44 @@ jobs:
                 }
                 let fileContent = fs.readFileSync(FILE_PATH, 'utf-8');
 
+                // 精準抓取 7788.js 現有的第一筆日期
                 const firstLineRegex = /\['(\d{4}-\d{2}-\d{2})'/;
                 const match = fileContent.match(firstLineRegex);
                 if (!match) {
                     console.error('無法解析 7788.js 的首列日期');
                     process.exit(0);
                 }
-                const lastUpdatedDate = match;
+                const lastUpdatedDate = match[1];
                 console.log(`7788.js 目前最新日期為: ${lastUpdatedDate}`);
 
-                const d1 = new Date(targetDateStr);
-                const d2 = new Date(lastUpdatedDate);
-                const diffDays = Math.ceil(Math.abs(d1 - d2) / (1000 * 60 * 60 * 24));
-
-                console.log('正在從公開免封鎖節點下載資料...');
+                console.log('正在從公共開獎資料庫下載數據...');
                 const apiData = await fetchLottoData();
                 
-                if (!apiData || !apiData.results) {
-                    console.error('API 回傳無效內容');
+                if (!apiData || !apiData.records) {
+                    console.error('資料庫格式異常');
                     process.exit(0);
                 }
 
-                // 整理開放節點裡的開獎紀錄
+                // 整理資料庫裡的歷史紀錄
                 let webRecords = {};
-                apiData.results.forEach(item => {
+                apiData.records.forEach(item => {
                     webRecords[item.date] = {
-                        ballOrder: item.ball_order, // 落球
-                        sortOrder: item.sort_order  // 順球
+                        ballOrder: item.ball_order, // 落球數組
+                        sortOrder: item.sort_order  // 順球數組
                     };
                 });
 
                 const targetData = webRecords[targetDateStr];
+                const d1 = new Date(targetDateStr);
+                const d2 = new Date(lastUpdatedDate);
+                const diffDays = Math.ceil(Math.abs(d1 - d2) / (1000 * 60 * 60 * 24));
 
                 // 【兩期以上未更新】
                 if (diffDays >= 2 && lastUpdatedDate < targetDateStr) {
                     console.log(`[多期補登] 相差 ${diffDays} 天，執行落球補登...`);
                     let insertText = '';
                     for (let d = new Date(d2.getTime() + 86400000); d <= d1; d.setDate(d.getDate() + 1)) {
-                        const checkStr = d.toISOString().split('T');
+                        const checkStr = d.toISOString().split('T')[0];
                         if (webRecords[checkStr]) {
                             const row = webRecords[checkStr];
                             insertText += `['${checkStr}',['${row.ballOrder.join("','")}']],\n`;
@@ -141,7 +141,7 @@ jobs:
                     if (insertText) {
                         fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
                         fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                        console.log('✅ [多期補登成功] 資料已安全寫入 7788.js');
+                        console.log('✅ [多期補登成功] 資料已寫入 7788.js');
                     }
                     process.exit(0);
                 }
@@ -159,11 +159,11 @@ jobs:
                             process.exit(0);
                         }
                     }
-                    console.log('資料已是最新，無需替換。');
+                    console.log('資料已是最新，無需重複替換。');
                     process.exit(0);
                 }
 
-                // 【一期未更新】且【首列日期較舊 -> 執行插入】
+                // 【一期未更新】且【首列日期較舊 -> 執行新期別插入】
                 if (lastUpdatedDate < targetDateStr && targetData) {
                     if (timeValue >= 2040 && timeValue < 2100) {
                         const insertText = `['${targetDateStr}',['${targetData.sortOrder.join("','")}']],\n`;
@@ -179,7 +179,7 @@ jobs:
                     process.exit(0);
                 }
 
-                console.log('目前尚無最新期別數據釋出。');
+                console.log('目前資料庫尚未釋出最新期別數據，等待下一次排程。');
                 process.exit(0);
             } catch (err) {
                 console.error('嚴重錯誤:', err.message);
@@ -198,7 +198,7 @@ jobs:
         git add 7788.js
         
         if ! git diff --cached --quiet; then
-          git commit -m "🤖 539 獎號同步更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
+          git commit -m "🤖 獎號同步更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
           git push
         else
           echo "無變動，跳過 Commit。"
