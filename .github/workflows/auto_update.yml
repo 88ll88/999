@@ -27,18 +27,19 @@ jobs:
         node-version: '20'
 
     - name: 執行更新腳本
-      id: run_script
-      # 允許自訂結束狀態代碼 (99代表跳過)
-      continue-on-error: true
       run: |
-        node update.js
-        echo "EXIT_CODE=$?" >> $GITHUB_ENV
+        node update.js || exit 0 # 如果腳本回傳 99 或失敗，也正常結束不報錯
 
     - name: 檢查檔案是否有變動並提交回 GitHub
-      if: env.EXIT_CODE == '0'
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add 7788.js
-        git commit -m "🤖 自動更新獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
-        git push
+        
+        # 關鍵修正：檢查有沒有東西可以 commit，若沒有就優雅地跳過
+        if ! git diff --cached --quiet; then
+          git commit -m "🤖 自動更新獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
+          git push
+        else
+          echo "7788.js 沒有任何變動，跳過 Commit。"
+        fi
