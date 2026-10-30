@@ -3,7 +3,7 @@ const https = require('https');
 
 const FILE_PATH = '7788.js';
 
-function getTaiwanTimeInfo() {
+function getTargetDate() {
   const now = new Date();
   const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
   const taiwanTime = new Date(utc + (3600000 * 8));
@@ -20,11 +20,7 @@ function getTaiwanTimeInfo() {
   const yyyy = taiwanTime.getFullYear();
   const mm = String(taiwanTime.getMonth() + 1).padStart(2, '0');
   const dd = String(taiwanTime.getDate()).padStart(2, '0');
-  
-  return {
-    targetDate: `${yyyy}-${mm}-${dd}`,
-    timeNum: timeNum
-  };
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function fetchUrl(url) {
@@ -37,7 +33,6 @@ function fetchUrl(url) {
   });
 }
 
-// 同時擷取落球與順球
 async function fetchDrawData(targetDate) {
   try {
     const html = await fetchUrl('https://pilio.idv.tw/lto539/');
@@ -69,12 +64,12 @@ function write7788(data) {
 }
 
 async function run() {
-  const { targetDate, timeNum } = getTaiwanTimeInfo();
+  const targetDate = getTargetDate();
   const { data } = read7788();
-  const topRow = data[0]; // [日期, [號碼]]
+  const topRow = data[0];
   const topDate = topRow[0];
 
-  console.log(`目標日期: ${targetDate}, 目前時間代號: ${timeNum}, 7788.js 首列日期: ${topDate}`);
+  console.log(`目標日期: ${targetDate}, 7788.js 首列日期: ${topDate}`);
 
   const drawInfo = await fetchDrawData(targetDate);
   if (!drawInfo) {
@@ -84,28 +79,26 @@ async function run() {
 
   let updated = false;
 
-  // 1. 若首列還不是今天（且時間過 20:40），插入「順球」
-  if (topDate !== targetDate && timeNum >= 2040) {
-    console.log(`[插入] 首列日期 ${topDate} != 目標 ${targetDate}，插入順球：`, drawInfo.orderBalls);
+  // 情況 A：首列日期小於目標日期（例如首列 28 號，目標 29 號）-> 插入順球
+  if (topDate < targetDate) {
+    console.log(`[插入] 首列日期 ${topDate} 小於目標 ${targetDate}，插入順球：`, drawInfo.orderBalls);
     data.unshift([targetDate, drawInfo.orderBalls]);
     updated = true;
   }
-  // 2. 若首列已經是今天，但內容還不是落球（且時間過 21:00），替換為「落球」
-  else if (topDate === targetDate && timeNum >= 2100) {
+  // 情況 B：首列日期已經是目標日期，但內容還不是落球格式 -> 替換為落球
+  else if (topDate === targetDate) {
     if (JSON.stringify(topRow[1]) !== JSON.stringify(drawInfo.dropBalls)) {
-      console.log(`[替換] 首列已存在，將其替換為落球：`, drawInfo.dropBalls);
+      console.log(`[替換] 首列日期相符，將內容替換為落球：`, drawInfo.dropBalls);
       data[0] = [targetDate, drawInfo.dropBalls];
       updated = true;
     } else {
-      console.log('首列已經是最新落球，無需替換');
+      console.log('首列已經是最新落球數據，無需更新');
     }
-  } else {
-    console.log('目前時間未達更新時段');
   }
 
   if (updated) {
     write7788(data);
-    console.log('7788.js 寫入完成');
+    console.log('7788.js 更新寫入完成');
   }
 }
 
