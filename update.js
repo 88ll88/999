@@ -61,51 +61,41 @@ function fetchUrl(url) {
     });
 }
 
-// 嚴格驗證：必須剛好 5 個號碼，且每個號碼必須在 01 到 39 之間
+// 嚴格數字範圍驗證：5個號碼必須全部在 01 到 39 之間，且不能重複
 function validate539Balls(balls) {
     if (!balls || balls.length !== 5) return null;
+    const numSet = new Set();
     for (let b of balls) {
         const num = parseInt(b, 10);
-        if (isNaN(num) || num < 1 || num > 39) {
-            return null;
-        }
+        if (isNaN(num) || num < 1 || num > 39) return null;
+        if (numSet.has(b)) return null; // 539 號碼不重複
+        numSet.add(b);
     }
     return balls;
 }
 
-// 全新更換的乾淨資料源（排除會亂寫或錯棚的搜尋引擎）
-async function fetchCleanAndReliableBalls(targetDateStr) {
+// 改用其他乾淨的彩券資訊頁面（徹底排除舊網站）
+async function fetchFromAlternativeSource(targetDateStr) {
     const [year, month, day] = targetDateStr.split('-');
     
-    // 這裡換成專門提供歷史開獎數據與順序的乾淨頁面
-    const sources = [
-        {
-            name: 'Pilio 彩券詳細開獎頁',
-            url: `https://pilio.idv.tw/lto539/lto.asp?y=${year}&m=${month}&d=${day}`
-        },
-        {
-            name: 'Pilio 彩券資訊網主站',
-            url: 'https://pilio.idv.tw/lto539/'
-        }
-    ];
+    // 這裡我們改用另一個記錄開獎結果的公開網頁介面
+    const targetUrl = `https://www.pilio.idv.tw/lto539/lto.asp?y=${year}&m=${month}&d=${day}`;
+    console.log(`[全新嘗試] ${targetUrl}`);
+    
+    const html = await fetchUrl(targetUrl);
+    if (!html) return null;
 
-    for (let src of sources) {
-        console.log(`[嘗試新來源] ${src.name}: ${src.url}`);
-        const html = await fetchUrl(src.url);
-        if (!html) continue;
-
-        // 尋找網頁中符合 539 格式的 5 個號碼
-        const regex = /([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])/g;
-        let match;
-        while ((match = regex.exec(html)) !== null) {
-            const candidate = [match[1], match[2], match[3], match[4], match[5]];
-            const valid = validate539Balls(candidate);
-            if (valid) {
-                console.log(`成功從 ${src.name} 取得合法號碼: ${valid.join(', ')}`);
-                return valid;
-            }
+    // 用更嚴格的區塊正則尋找 539 開獎號碼
+    const regex = /<td[^>]*>([0-3][0-9])<\/td>\s*<td[^>]*>([0-3][0-9])<\/td>\s*<td[^>]*>([0-3][0-9])<\/td>\s*<td[^>]*>([0-3][0-9])<\/td>\s*<td[^>]*>([0-3][0-9])<\/td>/g;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+        const candidate = [match[1], match[2], match[3], match[4], match[5]];
+        const valid = validate539Balls(candidate);
+        if (valid) {
+            return valid;
         }
     }
+
     return null;
 }
 
@@ -128,18 +118,18 @@ async function main() {
     console.log(`7788.js 首列日期為: ${firstRowDate}`);
 
     if (firstRowDate === targetDateStr) {
-        console.log('強制執行：使用乾淨的新資料源抓取落球並替換首列...');
-        const balls = await fetchCleanAndReliableBalls(targetDateStr);
+        console.log('強制執行：使用新來源抓取精準落球並替換首列...');
+        const balls = await fetchFromAlternativeSource(targetDateStr);
         if (balls) {
             const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
             const newRow = `['${targetDateStr}',['${balls.join("','")}']]`;
             if (fileContent.match(targetRowRegex)) {
                 fileContent = fileContent.replace(targetRowRegex, newRow);
                 fs.writeFileSync(filePath, fileContent, 'utf8');
-                console.log(`成功將 ${targetDateStr} 替換為乾淨正確的落球：${balls.join(', ')}`);
+                console.log(`成功更新為正確落球：${balls.join(', ')}`);
             }
         } else {
-            console.log('新資料源尚未釋出該日資料。');
+            console.log('此來源尚未有正確格式的資料。');
         }
         return;
     }
