@@ -36,8 +36,10 @@ function fetchUrl(url) {
 async function fetchDrawData(targetDate) {
   try {
     const html = await fetchUrl('https://pilio.idv.tw/lto539/');
+    
+    // 尋找包含目標日期的行，並精準抓取後方緊接著的 5 個兩位數開獎號碼
     const escapedDate = targetDate.replace(/-/g, '[-/]');
-    const regex = new RegExp(escapedDate + '[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})');
+    const regex = new RegExp(escapedDate + '[\\s\\S]*?<td>([0-9]{2})</td>[\\s\\S]*?<td>([0-9]{2})</td>[\\s\\S]*?<td>([0-9]{2})</td>[\\s\\S]*?<td>([0-9]{2})</td>[\\s\\S]*?<td>([0-9]{2})</td>');
     
     const match = html.match(regex);
     if (match) {
