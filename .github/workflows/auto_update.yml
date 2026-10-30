@@ -2,14 +2,14 @@ name: 自動更新 7788 今彩539 獎號
 
 on:
   schedule:
-    # 每天晚上 20:45 至 23:45，每 15 分鐘自動執行一次
-    - cron: '45 12 * * 1-6'
+    # 自動更新(順球)：20:40、20:50
+    - cron: '40 12 * * 1-6'
+    - cron: '50 12 * * 1-6'
+    
+    # 自動更新(落球)：21:00、21:30、22:00
     - cron: '00 13 * * 1-6'
-    - cron: '15 13 * * 1-6'
     - cron: '30 13 * * 1-6'
-    - cron: '45 13 * * 1-6'
     - cron: '00 14 * * 1-6'
-    - cron: '30 14 * * 1-6'
     
   workflow_dispatch: # 允許平板手動點擊執行測試
 
@@ -26,7 +26,7 @@ jobs:
       with:
         node-version: '20'
 
-    - name: 3. 建立並執行網頁原始碼精準解析腳本
+    - name: 3. 建立並執行 9800 精準解析腳本
       run: |
         rm -f update.js
         rm -f update_pure.js
@@ -36,19 +36,38 @@ jobs:
         const fs = require('fs');
         const path = require('path');
 
-        const NFD_URL = 'https://nfd.com.tw';
+        // 9800 開獎網的今彩 539 歷史開獎網址 (此處配置標準連線路徑)
+        const TARGET_URL = 'https://9800.com.tw'; 
         const FILE_PATH = path.join(__dirname, '7788.js');
 
-        function getTaipeiTodayStr() {
+        function getTaipeiDateInfo() {
             const now = new Date();
             const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
             const tzNow = new Date(utc + (3600000 * 8));
-            return `${tzNow.getFullYear()}-${String(tzNow.getMonth() + 1).padStart(2, '0')}-${String(tzNow.getDate()).padStart(2, '0')}`;
+            
+            const year = tzNow.getFullYear();
+            const month = String(tzNow.getMonth() + 1).padStart(2, '0');
+            const date = String(tzNow.getDate()).padStart(2, '0');
+            const hours = tzNow.getHours();
+            const minutes = tzNow.getMinutes();
+            
+            const todayStr = `${year}-${month}-${date}`;
+            const dayOfWeek = tzNow.getDay();
+
+            let targetDateStr = todayStr;
+            const timeValue = hours * 100 + minutes;
+
+            // 00:00 至 20:40 算昨天的帳
+            if (timeValue < 2040) {
+                const yesterday = new Date(tzNow.getTime() - 86400000);
+                targetDateStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+            }
+            return { targetDateStr, timeValue, dayOfWeek };
         }
 
-        function fetchNFDHtml() {
+        function fetchHtml() {
             return new Promise((resolve, reject) => {
-                const req = https.get(new URL(NFD_URL), {
+                https.get(TARGET_URL, {
                     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
                     timeout: 15000
                 }, (res) => {
@@ -58,16 +77,19 @@ jobs:
                         const buffer = Buffer.concat(chunks);
                         resolve(buffer.toString('utf-8'));
                     });
-                });
-                req.on('error', reject);
-                req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+                }).on('error', reject);
             });
         }
 
         async function main() {
             try {
-                const todayStr = getTaipeiTodayStr();
-                console.log(`【系統啟動】今天的台北日期為: ${todayStr}`);
+                const { targetDateStr, timeValue, dayOfWeek } = getTaipeiDateInfo();
+                console.log(`【9800排程啟動】目標日期: ${targetDateStr}, 時間權重: ${timeValue}`);
+
+                if (dayOfWeek === 0) {
+                    console.log('週日休市，跳過。');
+                    process.exit(0);
+                }
 
                 if (!fs.existsSync(FILE_PATH)) {
                     console.error('找不到 7788.js 檔案！');
@@ -82,58 +104,90 @@ jobs:
                     process.exit(0);
                 }
                 const lastUpdatedDate = match;
-                console.log(`7788.js 檔案內最新的一列日期為: ${lastUpdatedDate}`);
+                console.log(`7788.js 最新一列日期為: ${lastUpdatedDate}`);
 
-                if (lastUpdatedDate >= todayStr) {
-                    console.log('🎉 檔案資料已是最新，沒有任何未更新的期數。');
-                    process.exit(0);
-                }
+                const d1 = new Date(targetDateStr);
+                const d2 = new Date(lastUpdatedDate);
+                const diffDays = Math.ceil(Math.abs(d1 - d2) / (1000 * 60 * 60 * 24));
 
-                console.log(`偵測到未更新！開始精準抓取網頁表格特徵...`);
-                const html = await fetchNFDHtml();
+                console.log('正在讀取 9800 網頁原始碼...');
+                const html = await fetchHtml();
 
-                // 根據您提供的 HTML 結構，設計完美的正則表達式
-                // 1. 抓取日期：color="#000080">YYYY-MM-DD
-                // 2. 抓取順球(紅色字體)：color="#FF0000">XX&nbsp;XX&nbsp;XX&nbsp;XX&nbsp;XX
-                const rowRegex = /color="#000080">(\d{4}-\d{2}-\d{2})[\s\S]*?color="#FF0000">(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})/g;
-                
-                let foundRows = [];
+                // 建立 9800 專屬的正則表達式
+                // match[1] = 日期, match[2-6] = 順球(落球/紅色), match[7-11] = 大大小排序(綠色)
+                const rowRegex = /color="#000080">(\d{4}-\d{2}-\d{2})[\s\S]*?color="#FF0000">\s*(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})[\s\S]*?color="#006600">\s*(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})&nbsp;(\d{2})/g;
+
+                let webRecords = {};
                 let regexMatch;
-
                 while ((regexMatch = rowRegex.exec(html)) !== null) {
-                    const formattedDate = regexMatch;
-                    
-                    // 只要網頁日期大於檔案日期，且不大於今天，通通抓下來
-                    if (formattedDate > lastUpdatedDate && formattedDate <= todayStr) {
-                        const nums = [regexMatch, regexMatch, regexMatch, regexMatch, regexMatch];
-                        foundRows.push({ date: formattedDate, numbers: nums });
-                    }
+                    const d = regexMatch[1];
+                    webRecords[d] = {
+                        ballOrder: [regexMatch[2], regexMatch[3], regexMatch[4], regexMatch[5], regexMatch[6]], // 紅色落球
+                        sortOrder: [regexMatch[7], regexMatch[8], regexMatch[9], regexMatch[10], regexMatch[11]] // 綠色順球
+                    };
                 }
 
-                if (foundRows.length === 0) {
-                    console.log('⚠️ 網頁原始碼中尚未搜尋到符合條件的新期別，先跳過。');
+                const targetData = webRecords[targetDateStr];
+
+                // 【兩期以上未更新】
+                if (diffDays >= 2 && lastUpdatedDate < targetDateStr) {
+                    console.log(`[多期補登] 相差 ${diffDays} 天，執行落球補登...`);
+                    let insertText = '';
+                    // 由舊到新檢查漏掉的日期
+                    for (let d = new Date(d2.getTime() + 86400000); d <= d1; d.setDate(d.getDate() + 1)) {
+                        const checkStr = d.toISOString().split('T')[0];
+                        if (webRecords[checkStr]) {
+                            const row = webRecords[checkStr];
+                            insertText += `['${checkStr}',['${row.ballOrder.join("','")}']],\n`;
+                        }
+                    }
+                    if (insertText) {
+                        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
+                        fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
+                        console.log('✅ [多期補登成功] 落球資料已補齊！');
+                    }
                     process.exit(0);
                 }
 
-                // 依照日期由舊到新排序
-                foundRows.sort((a, b) => a.date.localeCompare(b.date));
-
-                let insertText = '';
-                foundRows.forEach(row => {
-                    // 嚴格遵循格式，完全沒有空格
-                    insertText += `['${row.date}',['${row.numbers.join("','")}']],\n`;
-                    console.log(`精準抓取成功！準備補登: ${row.date} -> 順球: ${row.numbers.join(',')}`);
-                });
-
-                if (insertText) {
-                    fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
-                    fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                    console.log('✅ 未更新的缺失期數已根據 NFD 表格成功全部補齊！');
+                // 【一期未更新】且【首列日期相同 -> 執行落球替換】
+                if (lastUpdatedDate === targetDateStr && timeValue >= 2100) {
+                    if (targetData) {
+                        const sortedStr = `['${targetDateStr}',['${targetData.sortOrder.join("','")}']]`;
+                        const ballStr = `['${targetDateStr}',['${targetData.ballOrder.join("','")}']]`;
+                        
+                        if (fileContent.includes(sortedStr)) {
+                            fileContent = fileContent.replace(sortedStr, ballStr);
+                            fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
+                            console.log(`✅ [一期替換成功] 順球已成功替換為落球！`);
+                            process.exit(0);
+                        }
+                    }
+                    console.log('檔案已是最新，且首列非順球或無需替換。');
+                    process.exit(0);
                 }
 
+                // 【一期未更新】且【首列日期較舊 -> 執行新期別插入】
+                if (lastUpdatedDate < targetDateStr && targetData) {
+                    if (timeValue >= 2040 && timeValue < 2100) {
+                        // 20:40 順球時段：插入綠色大小排序
+                        const insertText = `['${targetDateStr}',['${targetData.sortOrder.join("','")}']],\n`;
+                        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
+                        fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
+                        console.log(`✅ [一期順球成功] 已插入首列順球數據！`);
+                    } else if (timeValue >= 2100) {
+                        // 21:00 落球時段：直接插入紅色落球順序
+                        const insertText = `['${targetDateStr}',['${targetData.ballOrder.join("','")}']],\n`;
+                        fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
+                        fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
+                        console.log(`✅ [一期落球成功] 已直接插入首列落球數據！`);
+                    }
+                    process.exit(0);
+                }
+
+                console.log('數據未完全釋出或無須變動。');
                 process.exit(0);
             } catch (err) {
-                console.error('執行過程中發生嚴重錯誤:', err.message);
+                console.error('嚴重錯誤:', err.message);
                 process.exit(0);
             }
         }
@@ -149,8 +203,8 @@ jobs:
         git add 7788.js
         
         if ! git diff --cached --quiet; then
-          git commit -m "🤖 精準補登 NFD 最新順球獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
+          git commit -m "🤖 9800 539 獎號同步更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
           git push
         else
-          echo "7788.js 資料無變動，安全跳過 Commit。"
+          echo "無變動，跳過 Commit。"
         fi
