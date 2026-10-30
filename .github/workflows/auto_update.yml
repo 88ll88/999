@@ -11,22 +11,22 @@ on:
     - cron: '30 13 * * 1-6'
     - cron: '00 14 * * 1-6'
     
-  workflow_dispatch: # 允許手動點擊執行
+  workflow_dispatch: # 允許手動點擊執行測試
 
 jobs:
   update-lotto:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 檢查出專案程式碼
+    - name: 1. 檢查出專案程式碼
       uses: actions/checkout@v4
 
-    - name: 設定 Node.js 環境
+    - name: 2. 設定 Node.js 環境
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
-    - name: 建立並執行最新的更新腳本
+    - name: 3. 建立並執行獨立更新腳本
       run: |
         rm -f update.js
         rm -f update_pure.js
@@ -36,7 +36,8 @@ jobs:
         const fs = require('fs');
         const path = require('path');
 
-        const API_URL = 'https://taiwanlottery.com';
+        const TAI_WAN_LOTTERY_API = 'https://taiwanlottery.com';
+        const NFD_URL = 'https://nfd.com.tw';
         const FILE_PATH = path.join(__dirname, '7788.js');
 
         function getTaipeiDateInfo() {
@@ -56,42 +57,71 @@ jobs:
             let targetDateStr = todayStr;
             const timeValue = hours * 100 + minutes;
 
+            // 核心時間權重：00:00 至 20:40 算昨天的帳
             if (timeValue < 2040) {
                 const yesterday = new Date(tzNow.getTime() - 86400000);
                 targetDateStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
             }
-            return { todayStr, targetDateStr, dayOfWeek, timeValue };
+            return { targetDateStr, timeValue, dayOfWeek };
         }
 
-        function fetchLottoData() {
+        function requestUrl(url) {
             return new Promise((resolve, reject) => {
-                try {
-                    const urlObject = new URL(API_URL);
-                    const req = https.get(urlObject, {
-                        headers: { 
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                            'Accept': 'application/json'
-                        },
-                        timeout: 15000
-                    }, (res) => {
-                        let data = '';
-                        res.on('data', (chunk) => { data += chunk; });
-                        res.on('end', () => {
-                            try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
-                        });
-                    });
-                    req.on('error', (err) => reject(err));
-                    req.on('timeout', () => { req.destroy(); reject(new Error('連線逾時')); });
-                } catch (urlErr) {
-                    reject(urlErr);
-                }
+                const req = https.get(new URL(url), {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+                    timeout: 10000
+                }, (res) => {
+                    let data = '';
+                    res.on('data', (chunk) => { data += chunk; });
+                    res.on('end', () => resolve(data));
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
             });
+        }
+
+        async function fetchFromTaiwanLottery(targetDateStr) {
+            try {
+                const raw = await requestUrl(TAI_WAN_LOTTERY_API);
+                const json = JSON.parse(raw);
+                if (json && json.lottoResult) {
+                    const row = json.lottoResult.find(item => item.drawDate === targetDateStr);
+                    if (row) {
+                        return { ballOrder: row.ballOrder, resultOrder: row.resultOrder };
+                    }
+                }
+            } catch (e) {
+                console.log('⚠️ 台灣彩券 API 連線或解析失敗，準備切換至備用源...');
+            }
+            return null;
+        }
+
+        async function fetchFromNFD(targetDateStr) {
+            try {
+                const html = await requestUrl(NFD_URL);
+                const cleanDate = targetDateStr.replace(/-/g, '[/\\.-]');
+                const regex = new RegExp(cleanDate + '[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})');
+                const match = html.match(regex);
+                if (match) {
+                    const nums = [match[1], match[2], match[3], match[4], match[5]];
+                    // NFD 網頁歷史紀錄通常存放順球/大小，在此將其視為通用基礎號碼
+                    return { ballOrder: nums, resultOrder: nums };
+                }
+            } catch (e) {
+                console.log('⚠️ 樂透研究院 NFD 網頁抓取失敗。');
+            }
+            return null;
         }
 
         async function main() {
             try {
-                const { targetDateStr, timeValue } = getTaipeiDateInfo();
-                console.log(`目前台北時間判斷：目標開獎日應為 ${targetDateStr}`);
+                const { targetDateStr, timeValue, dayOfWeek } = getTaipeiDateInfo();
+                console.log(`[時間判定] 目標日期: ${targetDateStr}, 目前時間權重: ${timeValue}`);
+
+                if (dayOfWeek === 0) {
+                    console.log('週日休市，不執行更新。');
+                    process.exit(0);
+                }
 
                 if (!fs.existsSync(FILE_PATH)) {
                     console.error('找不到 7788.js 檔案！');
@@ -99,7 +129,7 @@ jobs:
                 }
                 let fileContent = fs.readFileSync(FILE_PATH, 'utf-8');
 
-                // 修正後的精準日期正則表達式
+                // 精準查找 7788.js 首列日期（排除任何多餘格式干擾）
                 const firstLineRegex = /\['(\d{4}-\d{2}-\d{2})'/;
                 const match = fileContent.match(firstLineRegex);
                 if (!match) {
@@ -109,92 +139,78 @@ jobs:
                 const lastUpdatedDate = match[1];
                 console.log(`7788.js 最新一列日期為: ${lastUpdatedDate}`);
 
-                if (lastUpdatedDate >= targetDateStr) {
-                    if (lastUpdatedDate === targetDateStr && timeValue >= 2100) {
-                        try {
-                            const apiData = await fetchLottoData();
-                            const targetRow = apiData.lottoResult.find(item => item.drawDate === targetDateStr);
-                            if (targetRow && targetRow.ballOrder && targetRow.ballOrder.length === 5) {
-                                const sortedStr = `['${targetDateStr}',['${targetRow.resultOrder.join("','")}']]`;
-                                const ballStr = `['${targetDateStr}',['${targetRow.ballOrder.join("','")}']]`;
-                                
-                                if (fileContent.includes(sortedStr)) {
-                                    fileContent = fileContent.replace(sortedStr, ballStr);
-                                    fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                                    console.log(`✅ [一期替換] 成功將 ${targetDateStr} 的順球替換為落球！`);
-                                    process.exit(0);
-                                }
-                            }
-                        } catch (netErr) {
-                            console.error('網路連線失敗，跳過落球替換:', netErr.message);
-                            process.exit(0);
-                        }
-                    }
-                    console.log('資料已是最新，無需更新。');
-                    process.exit(0); 
-                }
+                // 計算日期差距
+                const d1 = new Date(targetDateStr);
+                const d2 = new Date(lastUpdatedDate);
+                const diffTime = Math.abs(d1 - d2);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-                let apiData;
-                try {
-                    apiData = await fetchLottoData();
-                } catch (netErr) {
-                    console.error('台彩連線失敗，本次排程跳過:', netErr.message);
-                    process.exit(0);
-                }
-
-                if (!apiData || !apiData.lottoResult) {
-                    console.error('台彩 API 回傳異常');
-                    process.exit(0);
-                }
-
-                const missingRows = apiData.lottoResult
-                    .filter(item => item.drawDate > lastUpdatedDate && item.drawDate <= targetDateStr)
-                    .sort((a, b) => a.drawDate.localeCompare(b.drawDate));
-
-                if (missingRows.length === 0) {
-                    console.log('台彩官方尚未更新該期資料。');
-                    process.exit(0);
-                }
-
-                if (missingRows.length >= 2) {
-                    console.log(`偵測到 ${missingRows.length} 期未更新，執行補登落球邏輯...`);
-                    let insertText = '';
-                    for (let i = missingRows.length - 1; i >= 0; i--) {
-                        const row = missingRows[i];
-                        if (row.ballOrder && row.ballOrder.length === 5) {
-                            insertText += `['${row.drawDate}',['${row.ballOrder.join("','")}']],\n`;
-                        }
-                    }
-                    if (insertText) {
+                // 情況一：兩期以上（含兩期）未更新
+                if (diffDays >= 2 && lastUpdatedDate < targetDateStr) {
+                    console.log(`[多期未更新] 檢測到相差 ${diffDays} 天，觸發落球補登邏輯...`);
+                    const data = await fetchFromTaiwanLottery(targetDateStr) || await fetchFromNFD(targetDateStr);
+                    if (data && data.ballOrder && data.ballOrder.length === 5) {
+                        const insertText = `['${targetDateStr}',['${data.ballOrder.join("','")}']],\n`;
                         fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
                         fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                        console.log('✅ [多期補登] 成功補入落球數據！');
+                        console.log(`✅ [多期補登] 成功插入首列落球數據！`);
                         process.exit(0);
                     }
-                } else if (missingRows.length === 1) {
-                    const row = missingRows[0];
+                    console.log('尚未獲取到有效的開獎數據。');
+                    process.exit(0);
+                }
+
+                // 情況二：一期未更新或需要執行落球替換
+                if (lastUpdatedDate === targetDateStr) {
+                    if (timeValue >= 2100) {
+                        console.log('[落球更新時段] 檢查是否需要執行落球替換...');
+                        const data = await fetchFromTaiwanLottery(targetDateStr);
+                        if (data && data.ballOrder && data.resultOrder) {
+                            const sortedStr = `['${targetDateStr}',['${data.resultOrder.join("','")}']]`;
+                            const ballStr = `['${targetDateStr}',['${data.ballOrder.join("','")}']]`;
+                            
+                            if (fileContent.includes(sortedStr) && !fileContent.includes(ballStr)) {
+                                fileContent = fileContent.replace(sortedStr, ballStr);
+                                fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
+                                console.log(`✅ [一期替換] 成功將 ${targetDateStr} 的順球替換為落球！`);
+                                process.exit(0);
+                            }
+                        }
+                    }
+                    console.log('資料已是最新狀態。');
+                    process.exit(0);
+                }
+
+                // 情況三：剛好一期未更新，依據時段決定插入順球或落球
+                if (lastUpdatedDate < targetDateStr) {
+                    const data = await fetchFromTaiwanLottery(targetDateStr) || await fetchFromNFD(targetDateStr);
+                    if (!data) {
+                        console.log('各數據源皆未更新，跳過本次排程。');
+                        process.exit(0);
+                    }
+
                     if (timeValue >= 2040 && timeValue < 2100) {
-                        if (row.resultOrder && row.resultOrder.length === 5) {
-                            const insertText = `['${row.drawDate}',['${row.resultOrder.join("','")}']],\n`;
+                        if (data.resultOrder && data.resultOrder.length === 5) {
+                            const insertText = `['${targetDateStr}',['${data.resultOrder.join("','")}']],\n`;
                             fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
                             fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                            console.log(`✅ [一期順球] 成功插入 ${row.drawDate} 順球號碼！`);
+                            console.log(`✅ [一期順球] 成功插入 ${targetDateStr} 順球數據！`);
                             process.exit(0);
                         }
                     } else if (timeValue >= 2100) {
-                        if (row.ballOrder && row.ballOrder.length === 5) {
-                            const insertText = `['${row.drawDate}',['${row.ballOrder.join("','")}']],\n`;
+                        if (data.ballOrder && data.ballOrder.length === 5) {
+                            const insertText = `['${targetDateStr}',['${data.ballOrder.join("','")}']],\n`;
                             fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
                             fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                            console.log(`✅ [一期落球] 開獎日為: ${row.drawDate}，成功直接插入落球號碼！`);
+                            console.log(`✅ [一期落球] 成功直接插入 ${targetDateStr} 落球數據！`);
                             process.exit(0);
                         }
                     }
                 }
-                console.log('今日對應時段獎號未齊全，暫不變動。');
+
                 process.exit(0);
             } catch (err) {
-                console.error('執行過程中發生嚴重錯誤:', err.message);
+                console.error('運行發生致命錯誤:', err.message);
                 process.exit(0);
             }
         }
@@ -203,15 +219,15 @@ jobs:
         
         node update.js
 
-    - name: 檢查檔案是否有變動並提交回 GitHub
+    - name: 4. 檢查檔案變動並自動提交
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add 7788.js
         
         if ! git diff --cached --quiet; then
-          git commit -m "🤖 自動更新獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
+          git commit -m "🤖 539 獎號排程同步 [$(date '+%Y-%m-%d %H:%M:%S')]"
           git push
         else
-          echo "7788.js 沒有任何變動，跳過 Commit。"
+          echo "7788.js 資料內容無變動，安全跳過 Commit。"
         fi
