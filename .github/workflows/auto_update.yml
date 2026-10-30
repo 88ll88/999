@@ -28,7 +28,11 @@ jobs:
 
     - name: 執行更新腳本
       run: |
-        node update.js || exit 0 # 如果腳本回傳 99 或失敗，也正常結束不報錯
+        # 殺手鐧：不管 update.js 裡寫什麼，強制把裡面的舊網址和可能造成 Invalid URL 的程式碼直接替换掉！
+        sed -i 's|://taiwanlottery.com|://taiwanlottery.com|g' update.js
+        sed -i 's|https://taiwanlottery.com|https://://taiwanlottery.com|g' update.js
+        
+        node update.js || exit 0
 
     - name: 檢查檔案是否有變動並提交回 GitHub
       run: |
@@ -36,7 +40,6 @@ jobs:
         git config --local user.name "GitHub Action"
         git add 7788.js
         
-        # 關鍵修正：檢查有沒有東西可以 commit，若沒有就優雅地跳過
         if ! git diff --cached --quiet; then
           git commit -m "🤖 自動更新獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
           git push
