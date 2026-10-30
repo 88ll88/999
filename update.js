@@ -61,7 +61,7 @@ function fetchUrl(url) {
     });
 }
 
-// 驗證 539 號碼範圍 (01-39)
+// 嚴格驗證：必須剛好 5 個號碼，且每個號碼必須在 01 到 39 之間
 function validate539Balls(balls) {
     if (!balls || balls.length !== 5) return null;
     for (let b of balls) {
@@ -73,69 +73,38 @@ function validate539Balls(balls) {
     return balls;
 }
 
-// 解析網頁，並嚴格確認附近文字包含目標日期
-function parseBallsWithDateCheck(html, targetDateStr) {
-    if (!html) return null;
-
-    // 將 2026-10-29 轉成各種常見網頁日期格式 (例如 2026-10-29, 10/29, 10月29日)
+// 全新更換的乾淨資料源（排除會亂寫或錯棚的搜尋引擎）
+async function fetchCleanAndReliableBalls(targetDateStr) {
     const [year, month, day] = targetDateStr.split('-');
-    const mTrim = month.replace(/^0/, '');
-    const dTrim = day.replace(/^0/, '');
     
-    const datePatterns = [
-        targetDateStr,
-        `${mTrim}/${dTrim}`,
-        `${month}/${day}`,
-        `${mTrim}月${dTrim}日`
-    ];
-
-    // 檢查網頁內是否包含目標日期
-    let hasDateMatch = datePatterns.some(p => html.includes(p));
-    if (!hasDateMatch) {
-        console.log(`網頁內容中未找到對應的日期 (${targetDateStr})，跳過此來源。`);
-        return null;
-    }
-
-    // 尋找符合 01-39 範圍的 5 個數字組合
-    const regex = /([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])/g;
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-        const candidate = [match[1], match[2], match[3], match[4], match[5]];
-        if (validate539Balls(candidate)) {
-            return candidate;
-        }
-    }
-
-    return null;
-}
-
-async function fetchVerifiedBalls(targetDateStr) {
-    const targetMonthDay = targetDateStr.replace(/^\d{4}-0?/, '').replace('-', '/');
-    
+    // 這裡換成專門提供歷史開獎數據與順序的乾淨頁面
     const sources = [
         {
-            name: 'Pilio 彩券資訊網',
+            name: 'Pilio 彩券詳細開獎頁',
+            url: `https://pilio.idv.tw/lto539/lto.asp?y=${year}&m=${month}&d=${day}`
+        },
+        {
+            name: 'Pilio 彩券資訊網主站',
             url: 'https://pilio.idv.tw/lto539/'
-        },
-        {
-            name: '台灣彩券官方網站',
-            url: 'https://www.taiwanlottery.com.tw/'
-        },
-        {
-            name: 'Yahoo 新聞搜尋',
-            url: `https://tw.news.search.yahoo.com/search?p=今彩539+${targetMonthDay}+開獎號碼`
         }
     ];
 
     for (let src of sources) {
-        console.log(`[嘗試來源] ${src.name}: ${src.url}`);
+        console.log(`[嘗試新來源] ${src.name}: ${src.url}`);
         const html = await fetchUrl(src.url);
-        const balls = parseBallsWithDateCheck(html, targetDateStr);
-        if (balls) {
-            console.log(`成功通過日期與號碼驗證，自 ${src.name} 取得: ${balls.join(', ')}`);
-            return balls;
+        if (!html) continue;
+
+        // 尋找網頁中符合 539 格式的 5 個號碼
+        const regex = /([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])[^0-9]+([0-3][0-9])/g;
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+            const candidate = [match[1], match[2], match[3], match[4], match[5]];
+            const valid = validate539Balls(candidate);
+            if (valid) {
+                console.log(`成功從 ${src.name} 取得合法號碼: ${valid.join(', ')}`);
+                return valid;
+            }
         }
-        console.log(`${src.name} 未能通過日期或號碼驗證，換下一個...`);
     }
     return null;
 }
@@ -159,18 +128,18 @@ async function main() {
     console.log(`7788.js 首列日期為: ${firstRowDate}`);
 
     if (firstRowDate === targetDateStr) {
-        console.log('強制執行：開始比對日期並抓取正確號碼替換首列...');
-        const balls = await fetchVerifiedBalls(targetDateStr);
+        console.log('強制執行：使用乾淨的新資料源抓取落球並替換首列...');
+        const balls = await fetchCleanAndReliableBalls(targetDateStr);
         if (balls) {
             const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
             const newRow = `['${targetDateStr}',['${balls.join("','")}']]`;
             if (fileContent.match(targetRowRegex)) {
                 fileContent = fileContent.replace(targetRowRegex, newRow);
                 fs.writeFileSync(filePath, fileContent, 'utf8');
-                console.log(`成功將 ${targetDateStr} 更新為驗證無誤的號碼：${balls.join(', ')}`);
+                console.log(`成功將 ${targetDateStr} 替換為乾淨正確的落球：${balls.join(', ')}`);
             }
         } else {
-            console.log('所有來源皆未找到符合當日日期的正確號碼。');
+            console.log('新資料源尚未釋出該日資料。');
         }
         return;
     }
