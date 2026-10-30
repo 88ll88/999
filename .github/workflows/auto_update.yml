@@ -2,16 +2,16 @@ name: 自動更新 7788 今彩539 獎號
 
 on:
   schedule:
-    # 台北時間 20:40, 20:50 (順球時段) -> 轉為 UTC 是 12:40, 12:50
-    - cron: '40 12 * * 1-6'
-    - cron: '50 12 * * 1-6'
-    
-    # 台北時間 21:00, 21:30, 22:00 (落球時段) -> 轉為 UTC 是 13:00, 13:30, 14:00
+    # 每天晚上 20:45 至 23:45，每 15 分鐘自動執行一次，抓取最新開獎
+    - cron: '45 12 * * 1-6'
     - cron: '00 13 * * 1-6'
+    - cron: '15 13 * * 1-6'
     - cron: '30 13 * * 1-6'
+    - cron: '45 13 * * 1-6'
     - cron: '00 14 * * 1-6'
+    - cron: '30 14 * * 1-6'
     
-  workflow_dispatch: # 允許手動點擊執行測試
+  workflow_dispatch: # 允許平板手動點擊執行測試
 
 jobs:
   update-lotto:
@@ -26,7 +26,7 @@ jobs:
       with:
         node-version: '20'
 
-    - name: 3. 建立並執行獨立更新腳本
+    - name: 3. 建立並執行未更新期數查找腳本
       run: |
         rm -f update.js
         rm -f update_pure.js
@@ -39,29 +39,12 @@ jobs:
         const NFD_URL = 'https://nfd.com.tw';
         const FILE_PATH = path.join(__dirname, '7788.js');
 
-        function getTaipeiDateInfo() {
+        // 取得台北時間今天的標準日期 (YYYY-MM-DD)
+        function getTaipeiTodayStr() {
             const now = new Date();
             const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
             const tzNow = new Date(utc + (3600000 * 8));
-            
-            const year = tzNow.getFullYear();
-            const month = String(tzNow.getMonth() + 1).padStart(2, '0');
-            const date = String(tzNow.getDate()).padStart(2, '0');
-            const hours = tzNow.getHours();
-            const minutes = tzNow.getMinutes();
-            
-            const todayStr = `${year}-${month}-${date}`;
-            const dayOfWeek = tzNow.getDay();
-
-            let targetDateStr = todayStr;
-            const timeValue = hours * 100 + minutes;
-
-            // 00:00 至 20:40 算昨天的帳
-            if (timeValue < 2040) {
-                const yesterday = new Date(tzNow.getTime() - 86400000);
-                targetDateStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-            }
-            return { targetDateStr, timeValue, dayOfWeek };
+            return `${tzNow.getFullYear()}-${String(tzNow.getMonth() + 1).padStart(2, '0')}-${String(tzNow.getDate()).padStart(2, '0')}`;
         }
 
         function fetchNFDHtml() {
@@ -84,13 +67,8 @@ jobs:
 
         async function main() {
             try {
-                const { targetDateStr, timeValue, dayOfWeek } = getTaipeiDateInfo();
-                console.log(`[NFD排程啟動] 目標日期: ${targetDateStr}, 目前時間權重: ${timeValue}`);
-
-                if (dayOfWeek === 0) {
-                    console.log('週日休市，不執行更新。');
-                    process.exit(0);
-                }
+                const todayStr = getTaipeiTodayStr();
+                console.log(`【系統啟動】今天的台北日期為: ${todayStr}`);
 
                 if (!fs.existsSync(FILE_PATH)) {
                     console.error('找不到 7788.js 檔案！');
@@ -98,71 +76,66 @@ jobs:
                 }
                 let fileContent = fs.readFileSync(FILE_PATH, 'utf-8');
 
+                // 精準抓取 7788.js 目前的首列日期
                 const firstLineRegex = /\['(\d{4}-\d{2}-\d{2})'/;
                 const match = fileContent.match(firstLineRegex);
                 if (!match) {
                     console.error('無法解析 7788.js 的首列日期');
                     process.exit(0);
                 }
-                const lastUpdatedDate = match;
-                console.log(`7788.js 最新一列日期為: ${lastUpdatedDate}`);
+                const lastUpdatedDate = match[1];
+                console.log(`7788.js 檔案內最新的一列日期為: ${lastUpdatedDate}`);
 
-                const d1 = new Date(targetDateStr);
-                const d2 = new Date(lastUpdatedDate);
-                const diffTime = Math.abs(d1 - d2);
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-                // 情況一：兩期以上（含兩期）未更新 -> 抓 NFD 補登
-                if (diffDays >= 2 && lastUpdatedDate < targetDateStr) {
-                    console.log(`[多期未更新] 觸發 NFD 補登邏輯...`);
-                    try {
-                        const html = await fetchNFDHtml();
-                        const cleanDate = targetDateStr.replace(/-/g, '[/\\.-]');
-                        const regex = new RegExp(cleanDate + '[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})');
-                        const m = html.match(regex);
-                        if (m) {
-                            const insertText = `['${targetDateStr}',['${m[1]}','${m[2]}','${m[3]}','${m[4]}','${m[5]}']],\n`;
-                            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
-                            fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                            console.log(`✅ [多期補登] 成功補入 ${targetDateStr} 的數據！`);
-                            process.exit(0);
-                        }
-                    } catch (e) {
-                        console.log('NFD 網頁擷取失敗。');
-                    }
+                // 如果檔案日期已經大於或等於今天，代表完全沒有未更新的期數
+                if (lastUpdatedDate >= todayStr) {
+                    console.log('🎉 檔案資料已是最新，沒有未更新的期數，結束排程。');
                     process.exit(0);
                 }
 
-                // 情況二：日期已最新（由一期未更新狀態成功寫入後），因純網頁無區分落球/順球，故不執行重複替換
-                if (lastUpdatedDate >= targetDateStr) {
-                    console.log('資料已是最新狀態，無需重複處理。');
+                console.log(`偵測到未更新！開始從樂透研究院網頁查找大於 ${lastUpdatedDate} 的獎號...`);
+                const html = await fetchNFDHtml();
+
+                // 樂透研究院今彩539歷史網頁的特徵是：日期後面會依序出現 5 個號碼
+                // 我們用正則表達式把網頁裡所有的歷史紀錄一次撈出來
+                const recordRegex = /(\d{4})[/\.-](\d{2})[/\.-](\d{2})[\s\\S]*?(\d{2})[\s\\S]*?(\d{2})[\s\\S]*?(\d{2})[\s\\S]*?(\d{2})[\s\\S]*?(\d{2})/g;
+                let foundRows = [];
+                let regexMatch;
+
+                while ((regexMatch = recordRegex.exec(html)) !== null) {
+                    const formattedDate = `${regexMatch[1]}-${regexMatch[2]}-${regexMatch[3]}`;
+                    
+                    // 只要網頁上的日期比我們檔案裡的日期新，且不大於今天，就是我們漏掉需要補的！
+                    if (formattedDate > lastUpdatedDate && formattedDate <= todayStr) {
+                        const nums = [regexMatch[4], regexMatch[5], regexMatch[6], regexMatch[7], regexMatch[8]];
+                        foundRows.push({ date: formattedDate, numbers: nums });
+                    }
+                }
+
+                if (foundRows.length === 0) {
+                    console.log('⚠️ 樂透研究院網頁上尚未更新最新一期的文字，先跳過本次查找。');
                     process.exit(0);
                 }
 
-                // 情況三：剛好一期未更新 -> 從 NFD 抓取最新一期數字並插入首列
-                if (lastUpdatedDate < targetDateStr) {
-                    try {
-                        const html = await fetchNFDHtml();
-                        const cleanDate = targetDateStr.replace(/-/g, '[/\\.-]');
-                        const regex = new RegExp(cleanDate + '[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})[\\s\\S]*?(\\d{2})');
-                        const m = html.match(regex);
-                        if (m) {
-                            const insertText = `['${targetDateStr}',['${m[1]}','${m[2]}','${m[3]}','${m[4]}','${m[5]}']],\n`;
-                            fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
-                            fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
-                            console.log(`✅ [一期寫入] 成功插入首列日期 ${targetDateStr} 的獎號！`);
-                            process.exit(0);
-                        } else {
-                            console.log('樂透研究院 NFD 網頁尚未更新該期資料。');
-                        }
-                    } catch (e) {
-                        console.log('連線樂透研究院時發生錯誤。');
-                    }
+                // 將抓到的未更新期數，依照日期由舊到新排序，確保插入順序正確
+                foundRows.sort((a, b) => a.date.localeCompare(b.date));
+
+                let insertText = '';
+                foundRows.forEach(row => {
+                    // 完全遵循規格，絕對不留空格
+                    insertText += `['${row.date}',['${row.numbers.join("','")}']],\n`;
+                    console.log(`發現未更新期數，準備補登: ${row.date} -> ${row.numbers.join(',')}`);
+                });
+
+                if (insertText) {
+                    // 把整理好的多期或單期新內容，直接塞進 var 7788 = [ 的下一行
+                    fileContent = fileContent.replace('var 7788 = [\n', `var 7788 = [\n${insertText}`);
+                    fs.writeFileSync(FILE_PATH, fileContent, 'utf-8');
+                    console.log('✅ 缺失的期數已成功全部補齊寫入 7788.js！');
                 }
 
                 process.exit(0);
             } catch (err) {
-                console.error('運行發生致命錯誤:', err.message);
+                console.error('執行過程中發生嚴重錯誤:', err.message);
                 process.exit(0);
             }
         }
@@ -178,8 +151,8 @@ jobs:
         git add 7788.js
         
         if ! git diff --cached --quiet; then
-          git commit -m "🤖 NFD 539 獎號排程更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
+          git commit -m "🤖 自動補登缺失獎號 [$(date '+%Y-%m-%d %H:%M:%S')]"
           git push
         else
-          echo "7788.js 資料內容無變動，安全跳過 Commit。"
+          echo "7788.js 資料無變動，跳過 Commit。"
         fi
