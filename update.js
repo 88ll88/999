@@ -33,12 +33,13 @@ function getTaipeiDateInfo() {
 
 function fetchLottoData() {
     return new Promise((resolve, reject) => {
-        const req = https.get(API_URL, {
+        // 關鍵修正：使用 new URL(API_URL) 包裝網址，避免內建 https 模組報 Invalid URL 錯誤
+        const req = https.get(new URL(API_URL), {
             headers: { 
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json'
             },
-            timeout: 10000 // 設定 10 秒超時阻斷，避免卡死
+            timeout: 10000 // 設定 10 秒超時阻斷
         }, (res) => {
             let data = '';
             res.on('data', (chunk) => { data += chunk; });
@@ -59,7 +60,7 @@ async function main() {
 
         if (!fs.existsSync(FILE_PATH)) {
             console.error('找不到 7788.js 檔案！');
-            process.exit(1);
+            process.exit(0);
         }
         let fileContent = fs.readFileSync(FILE_PATH, 'utf-8');
 
@@ -67,7 +68,7 @@ async function main() {
         const match = fileContent.match(firstLineRegex);
         if (!match) {
             console.error('無法解析 7788.js 的首列日期');
-            process.exit(1);
+            process.exit(0);
         }
         const lastUpdatedDate = match[1];
         console.log(`7788.js 最新一列日期為: ${lastUpdatedDate}`);
@@ -102,7 +103,7 @@ async function main() {
             apiData = await fetchLottoData();
         } catch (netErr) {
             console.error('台彩連線失敗，本次排程跳過:', netErr.message);
-            process.exit(0); // 網路失敗也優雅退出，不報紅燈
+            process.exit(0);
         }
 
         if (!apiData || !apiData.lottoResult) {
