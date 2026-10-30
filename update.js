@@ -3,7 +3,8 @@ const https = require('https');
 
 const FILE_PATH = '7788.js';
 
-function getTargetDate() {
+// 取得台灣時間 (UTC+8) 的時間數字 (例如 20:35 為 2035)
+function getTaiwanTimeInfo() {
   const now = new Date();
   const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
   const taiwanTime = new Date(utc + (3600000 * 8));
@@ -19,7 +20,11 @@ function getTargetDate() {
   const yyyy = taiwanTime.getFullYear();
   const mm = String(taiwanTime.getMonth() + 1).padStart(2, '0');
   const dd = String(taiwanTime.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+  
+  return {
+    targetDate: `${yyyy}-${mm}-${dd}`,
+    timeNum: timeNum
+  };
 }
 
 function fetchUrl(url) {
@@ -32,19 +37,22 @@ function fetchUrl(url) {
   });
 }
 
+// 爬取台灣彩券或樂透堂/Pilio的開獎結果，同時抓取順球與落球
 async function fetchDrawData(targetDate) {
   try {
     const html = await fetchUrl('https://pilio.idv.tw/lto539/');
     
-    // 配合網站格式更動正則表達式，尋找目標日期與號碼
+    // 這裡透過正則表達式尋找該日期的號碼區段
     const escapedDate = targetDate.replace(/-/g, '[-/]');
-    const regex = new RegExp(escapedDate + '[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})');
+    const regex = new RegExp(escapedDate + '[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})[\\s\\S]*?([0-9]{2})');
     
-    // 如果 pilio 結構較單純，也可以嘗試抓取表格內的連續號碼
     const match = html.match(regex);
     if (match) {
-      const dropBalls = [match[1], match[2], match[3], match[4], match[5]];
-      const orderBalls = [...dropBalls].sort((a, b) => parseInt(a) - parseInt(b));
+      // 根據網頁結構提取落球 (前5個) 與 順球 (後5個或透過排序)
+      // 實務上若網站同時列出順球與落球，可分別對應：
+      const dropBalls = [match[1], match[2], match[3], match[4], match[5]]; // 示範落球
+      const orderBalls = [...dropBalls].sort((a, b) => parseInt(a) - parseInt(b)); // 順球 (從小到大)
+      
       return { dropBalls, orderBalls };
     }
   } catch (e) {
@@ -57,21 +65,21 @@ function read7788() {
   const content = fs.readFileSync(FILE_PATH, 'utf-8');
   const jsonStr = content.replace(/^var\s+7788\s*=\s*/, '').replace(/;\s*$/, '');
   const data = JSON.parse(jsonStr.replace(/'/g, '"'));
-  return { content, data };
+  return { data };
 }
 
 function write7788(data) {
-  const formatted = 'var 7788=\n' + JSON.stringify(data, null, 2).replace(/"/g, "'") + ';\n';
+  const formatted = 'var 7788 =\n' + JSON.stringify(data, null, 2).replace(/"/g, "'") + ';\n';
   fs.writeFileSync(FILE_PATH, formatted, 'utf-8');
 }
 
 async function run() {
-  const targetDate = getTargetDate();
+  const { targetDate, timeNum } = getTaiwanTimeInfo();
   const { data } = read7788();
-  const topRow = data[0];
+  const topRow = data[0]; // [日期, [號碼×5]]
   const topDate = topRow[0];
 
-  console.log(`目標日期: ${targetDate}, 7788.js 首列日期: ${topDate}`);
+  console.log(`目標日期: ${targetDate}, 目前時間代號: ${timeNum}, 7788.js 首列日期: ${topDate}`);
 
   const drawInfo = await fetchDrawData(targetDate);
   if (!drawInfo) {
@@ -81,21 +89,28 @@ async function run() {
 
   let updated = false;
 
-  if (topDate !== targetDate) {
-    console.log(`插入 ${targetDate} 順球號碼...`);
+  // 規則 1：若首列日期還停留在昨天（未更新）且時間已過 20:40，插入「順球」
+  if (topDate !== targetDate && timeNum >= 2040) {
+    console.log(`[20:40後] 插入 ${targetDate} 順球號碼...`);
     data.unshift([targetDate, drawInfo.orderBalls]);
     updated = true;
-  } else if (JSON.stringify(topRow[1]) !== JSON.stringify(drawInfo.dropBalls)) {
-    console.log(`替換 ${targetDate} 首列為落球號碼...`);
-    data[0] = [targetDate, drawInfo.dropBalls];
-    updated = true;
+  } 
+  // 規則 2：若首列日期已經是今天，但時間來到 21:00 後，檢查並替換為「落球」
+  else if (topDate === targetDate && timeNum >= 2100) {
+    if (JSON.stringify(topRow[1]) !== JSON.stringify(drawInfo.dropBalls)) {
+      console.log(`[21:00後] 替換 ${targetDate} 首列為落球號碼...`);
+      data[0] = [targetDate, drawInfo.dropBalls];
+      updated = true;
+    } else {
+      console.log('首列已經是落球數據，無需重複替換');
+    }
   } else {
-    console.log('首列已是最新落球數據，無需更新');
+    console.log('未到更新時段或已完成對應更新');
   }
 
   if (updated) {
     write7788(data);
-    console.log('7788.js 本地更新完畢');
+    console.log('7788.js 更新完畢並寫入');
   }
 }
 
