@@ -2,8 +2,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-// 確保是 ://taiwanlottery.com 完整正確路徑
-const API_URL = 'https://://taiwanlottery.com/TLCAPI/Static-Data/Lotto/Result/DailyCash';
+const API_URL = 'https://taiwanlottery.com';
 const FILE_PATH = path.join(__dirname, '7788.js');
 
 function getTaipeiDateInfo() {
@@ -33,23 +32,28 @@ function getTaipeiDateInfo() {
 
 function fetchLottoData() {
     return new Promise((resolve, reject) => {
-        // 關鍵修正：使用 new URL(API_URL) 包裝網址，避免內建 https 模組報 Invalid URL 錯誤
-        const req = https.get(new URL(API_URL), {
-            headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
-            },
-            timeout: 10000 // 設定 10 秒超時阻斷
-        }, (res) => {
-            let data = '';
-            res.on('data', (chunk) => { data += chunk; });
-            res.on('end', () => {
-                try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+        try {
+            // 一律在函數最內部將 API_URL 轉換為正確的 URL 物件，徹底根絕 Invalid URL 錯誤
+            const urlObject = new URL(API_URL);
+            const req = https.get(urlObject, {
+                headers: { 
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json'
+                },
+                timeout: 10000
+            }, (res) => {
+                let data = '';
+                res.on('data', (chunk) => { data += chunk; });
+                res.on('end', () => {
+                    try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+                });
             });
-        });
-        
-        req.on('error', (err) => reject(err));
-        req.on('timeout', () => { req.destroy(); reject(new Error('連線逾時')); });
+            
+            req.on('error', (err) => reject(err));
+            req.on('timeout', () => { req.destroy(); reject(new Error('連線逾時')); });
+        } catch (urlErr) {
+            reject(urlErr);
+        }
     });
 }
 
