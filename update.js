@@ -1,140 +1,73 @@
 const fs = require('fs');
-const path = require('path');
-const https = require('https');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
-const filePath = path.join(__dirname, '7788.js');
+// 設定資料檔名 (例如 zzz.js 或 ddd.js)
+const DATA_FILE = './zzz.js';
 
-function getTaiwanTime() {
-    const now = new Date();
-    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    return new Date(utc + (3600000 * 8));
-}
-
-function formatDate(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-}
-
-function getTargetDrawDate() {
-    const tw = getTaiwanTime();
-    const hours = tw.getHours();
-    const minutes = tw.getMinutes();
-    const timeVal = hours * 100 + minutes;
-
-    let target = new Date(tw);
-    if (timeVal >= 0 && timeVal <= 2040) {
-        target.setDate(target.getDate() - 1);
-    }
-    if (target.getDay() === 0) {
-        target.setDate(target.getDate() - 1);
-    }
-    return formatDate(target);
-}
-
-function fetchUrl(url) {
-    return new Promise((resolve) => {
-        const options = {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
-            }
-        };
-
-        const req = https.get(url, options, (res) => {
-            let data = '';
-            res.on('data', (chunk) => { data += chunk; });
-            res.on('end', () => { resolve(data); });
-        });
-
-        req.on('error', (err) => {
-            console.error(`連線錯誤 (${url}):`, err.message);
-            resolve(null);
-        });
-
-        req.setTimeout(8000, () => {
-            req.destroy();
-            console.error(`連線逾時 (${url})`);
-            resolve(null);
-        });
+async function fetchLatest539() {
+  try {
+    // 範例：從第三方資料源抓取 HTML 解析（可依實際目標網址調整 CSS selector）
+    const response = await axios.get('https://9800.com.tw/lotto539/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
     });
-}
 
-// 嚴格數字範圍驗證：5個號碼必須全部在 01 到 39 之間，且不能重複
-function validate539Balls(balls) {
-    if (!balls || balls.length !== 5) return null;
-    const numSet = new Set();
-    for (let b of balls) {
-        const num = parseInt(b, 10);
-        if (isNaN(num) || num < 1 || num > 39) return null;
-        if (numSet.has(b)) return null; // 539 號碼不重複
-        numSet.add(b);
-    }
-    return balls;
-}
-
-// 改用其他乾淨的彩券資訊頁面（徹底排除舊網站）
-async function fetchFromAlternativeSource(targetDateStr) {
-    const [year, month, day] = targetDateStr.split('-');
+    const $ = cheerio.load(response.data);
     
-    // 這裡我們改用另一個記錄開獎結果的公開網頁介面
-    const targetUrl = `https://www.pilio.idv.tw/lto539/lto.asp?y=${year}&m=${month}&d=${day}`;
-    console.log(`[全新嘗試] ${targetUrl}`);
+    // 假設抓取最新一期的日期與號碼（請依目標網頁結構調整 CSS Selector）
+    const latestDate = $('.draw-date').first().text().trim(); // 例: "2026-10-30"
+    const numbersText = $('.draw-numbers').first().text().trim(); // 例: "05, 12, 19, 23, 38"
     
-    const html = await fetchUrl(targetUrl);
-    if (!html) return null;
-
-    // 用更嚴格的區塊正則尋找 539 開獎號碼
-    const regex = /<td[^>]*>([0-3][0-9])<\/td>\s*<td[^>]*>([0-3][0-9])<\/td>\s*<td[^>]*>([0-3][0-9])<\/td>\s*<td[^>]*>([0-3][0-9])<\/td>\s*<td[^>]*>([0-3][0-9])<\/td>/g;
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-        const candidate = [match[1], match[2], match[3], match[4], match[5]];
-        const valid = validate539Balls(candidate);
-        if (valid) {
-            return valid;
-        }
+    if (!latestDate || !numbersText) {
+      console.log('未抓取到有效資料，請檢查 Selector');
+      return null;
     }
 
+    const numbers = numbersText.split(',').map(n => n.trim().padStart(2, '0'));
+
+    return {
+      date: latestDate,
+      numbers: numbers // 順球或落球陣列
+    };
+  } catch (error) {
+    console.error('抓取資料失敗:', error.message);
     return null;
+  }
 }
 
-async function main() {
-    if (!fs.existsSync(filePath)) {
-        console.error('找不到 7788.js 檔案');
-        return;
-    }
+async function updateData() {
+  const latestData = await fetchLatest539();
+  if (!latestData) return;
 
-    let fileContent = fs.readFileSync(filePath, 'utf8');
-    const targetDateStr = getTargetDrawDate();
-    console.log(`計算出的目標已開獎日期為: ${targetDateStr}`);
+  // 讀取現有 JS 資料檔
+  let currentContent = '';
+  if (fs.existsSync(DATA_FILE)) {
+    currentContent = fs.readFileSync(DATA_FILE, 'utf-8');
+  }
 
-    const match = fileContent.match(/\[\s*'(\d{4}-\d{2}-\d{2})',\s*\[(.*?)\]\s*\]/);
-    if (!match) {
-        console.error('無法解析 7788.js 首列格式');
-        return;
-    }
-    const firstRowDate = match[1];
-    console.log(`7788.js 首列日期為: ${firstRowDate}`);
+  // 判斷是否已經存在最新日期，避免重複寫入
+  if (currentContent.includes(latestData.date)) {
+    console.log(`[${latestData.date}] 資料已是最新，無需更新。`);
+    return;
+  }
 
-    if (firstRowDate === targetDateStr) {
-        console.log('強制執行：使用新來源抓取精準落球並替換首列...');
-        const balls = await fetchFromAlternativeSource(targetDateStr);
-        if (balls) {
-            const targetRowRegex = new RegExp(`\\['${targetDateStr}',\\s*\\[.*?\\]\\]`, 'g');
-            const newRow = `['${targetDateStr}',['${balls.join("','")}']]`;
-            if (fileContent.match(targetRowRegex)) {
-                fileContent = fileContent.replace(targetRowRegex, newRow);
-                fs.writeFileSync(filePath, fileContent, 'utf8');
-                console.log(`成功更新為正確落球：${balls.join(', ')}`);
-            }
-        } else {
-            console.log('此來源尚未有正確格式的資料。');
-        }
-        return;
-    }
+  console.log(`發現新開獎資料 [${latestData.date}]:`, latestData.numbers);
 
-    console.log('首列日期不同，等待更新...');
+  // 格式化新資料並追加/更新至檔案
+  // 假設檔案格式為 var lottoData = [...]; 或純 JSON 陣列
+  const newEntry = `  { "date": "${latestData.date}", "numbers": [${latestData.numbers.map(n => `"${n}"`).join(', ')}] },\n`;
+
+  // 簡易寫入示範（若寫入 .js 檔頭，可根據你的變數宣告格式調整）
+  if (currentContent.includes('[')) {
+    const updatedContent = currentContent.replace('[', '[\n' + newEntry);
+    fs.writeFileSync(DATA_FILE, updatedContent, 'utf-8');
+  } else {
+    fs.writeFileSync(DATA_FILE, `var lottoData = [\n${newEntry}];`, 'utf-8');
+  }
+
+  console.log('檔案更新成功！');
 }
 
-main();
+updateData();
