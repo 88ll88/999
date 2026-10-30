@@ -2,6 +2,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
+// 這是新版官方 API，網址絕對不能包含舊的 taiwanlottery.com
 const API_URL = 'https://taiwanlottery.com';
 const FILE_PATH = path.join(__dirname, '7788.js');
 
@@ -33,14 +34,13 @@ function getTaipeiDateInfo() {
 function fetchLottoData() {
     return new Promise((resolve, reject) => {
         try {
-            // 一律在函數最內部將 API_URL 轉換為正確的 URL 物件，徹底根絕 Invalid URL 錯誤
             const urlObject = new URL(API_URL);
             const req = https.get(urlObject, {
                 headers: { 
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept': 'application/json'
                 },
-                timeout: 10000
+                timeout: 15000
             }, (res) => {
                 let data = '';
                 res.on('data', (chunk) => { data += chunk; });
