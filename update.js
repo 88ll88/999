@@ -26,13 +26,13 @@ async function main() {
 
     let lotteryData = await fetchLotteryRecord(targetDate);
     if (!lotteryData) {
-        console.log(`[${targetDate}] 官方時尚未開獎或找不到資料。`);
+        console.log(`[${targetDate}] 官方尚未開獎或找不到資料。`);
         return;
     }
 
     let { drop, shun } = lotteryData;
 
-    // 邏輯判斷：20:40 先用順球插入，21:00 用落球替換
+    // 20:40 階段：若首列落後，先用「順球（大小排序）」插入首列
     if (topDate < targetDate) {
         if (shun && shun.length === 5) {
             records.unshift([targetDate, shun]);
@@ -48,6 +48,7 @@ async function main() {
         return;
     }
 
+    // 21:00 階段：精準替換首列為真正的落球序
     if (drop && drop.length === 5) {
         records[0][1] = drop;
         console.log(`[21:00 階段] 已將首列 ${targetDate} 替換為真正的落球序: [${drop.join(',')}]`);
@@ -92,21 +93,27 @@ async function fetchLotteryRecord(targetDate) {
         const text = await res.text();
 
         let dateIdx = text.indexOf(targetDate);
-        if (dateIdx === -1) return null;
-
-        const subText = text.substring(dateIdx, dateIdx + 1000);
-        const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+        let searchKey = targetDate;
         
-        if (!matches || matches.length < 12) return null;
+        if (dateIdx === -1) {
+            const [y, m, d] = targetDate.split('-');
+            const mingGuoYear = parseInt(y) - 1911;
+            searchKey = `${mingGuoYear}/${m}/${d}`;
+            dateIdx = text.indexOf(searchKey);
+            if (dateIdx === -1) return null;
+        }
 
-        let validBalls = matches.filter(n => {
-            let num = parseInt(n, 10);
-            return num >= 1 && num <= 39;
-        });
+        // 關鍵修正：從「日期字串結束的位置」開始往後截取，完全避開日期本身的數字
+        const subText = text.substring(dateIdx + searchKey.length, dateIdx + searchKey.length + 600);
+        
+        const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+        if (!matches || matches.length < 10) return null;
 
-        if (validBalls.length >= 10) {
-            let drop = validBalls.slice(0, 5).map(n => n.padStart(2, '0'));
-            let shun = validBalls.slice(5, 10).map(n => n.padStart(2, '0'));
+        // 嚴格取前 5 個為落球，接下來 5 個為順球
+        let drop = matches.slice(0, 5).map(n => n.padStart(2, '0'));
+        let shun = matches.slice(5, 10).map(n => n.padStart(2, '0'));
+
+        if (drop.length === 5 && shun.length === 5) {
             return { drop, shun };
         }
     } catch (e) {
