@@ -2,14 +2,10 @@ name: Auto Update 7788.js
 
 on:
   schedule:
-    # 台灣時間 (UTC+8) 週一至週六
-    # 20:45 -> UTC 12:45
     - cron: '45 12 * * 1-6'
-    # 21:00 -> UTC 13:00
-    - cron: '00 13 * * 1-6'
-    # 21:30 -> UTC 13:30
+    - cron: '0 13 * * 1-6'
     - cron: '30 13 * * 1-6'
-    
+  
   workflow_dispatch:
 
 jobs:
