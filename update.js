@@ -1,7 +1,7 @@
 const fs = require('fs');
 
 async function main() {
-    console.log(`[${new Date().toISOString()}] 開始執行 7788.js 更新檢查...`);
+    console.log(`[${new Date().toISOString()}] 開始執行 7788.js 智慧更新檢查...`);
 
     let content = '';
     try {
@@ -21,35 +21,42 @@ async function main() {
     let topRecord = records[0];
     let topDate = topRecord[0];
 
+    // 1. 計算目標開獎日期（自動處理 20:40 換日與週日休息）
     let targetDate = getTargetDrawDate();
     console.log(`目標日期: ${targetDate}，7788.js 首列日期: ${topDate}`);
 
-    let shun = await fetchLotteryShun(targetDate);
-    if (!shun || shun.length !== 5) {
-        console.log(`[${targetDate}] 官方時尚未開獎或順球資料不完全。`);
+    // 2. 從網站抓取該日期的「順球（大小順序）」與「落球序」
+    let lotteryData = await fetchLotteryRecord(targetDate);
+    if (!lotteryData) {
+        console.log(`[${targetDate}] 官方尚未開獎或找不到該日期資料。`);
         return;
     }
 
-    // 邏輯判斷：
-    // 1. 若首列日期小於目標日期（落後兩期以上）：插入新列 ['日期', ['順球']]
+    let { shun, drop } = lotteryData;
+
+    // 3. 邏輯判斷與更新
     if (topDate < targetDate) {
+        // 【第一階段】若首列日期落後，先用「順球」插入新首列，讓您能先有資料寫著！
         records.unshift([targetDate, shun]);
-        console.log(`[兩期以上未更新] 插入新首列: ${targetDate} [${shun.join(',')}]`);
-    } 
-    // 2. 若首列日期剛好等於目標日期：直接替換首列的順球（落球直接對應順球）
-    else if (topDate === targetDate) {
-        topRecord[1] = shun;
-        console.log(`[一期未更新/更新首列] 成功替換 ${targetDate} 順球: [${shun.join(',')}]`);
+        console.log(`[兩期以上未更新] 先插入順球新首列: ${targetDate} [${shun.join(',')}]`);
+    } else if (topDate === targetDate) {
+        console.log(`[同日期] ${targetDate} 已存在於首列。`);
     } else {
         console.log('首列日期大於目標日期，無需更新。');
         return;
     }
 
-    // 嚴格格式化輸出（只輸出兩欄結構：日期與順球）
+    // 4. 【第二階段】若已經有「落球序」，用落球序替換剛才的首列數字
+    if (drop && drop.length === 5) {
+        records[0][1] = drop;
+        console.log(`[更新落球] 已將首列 ${targetDate} 替換為真正的落球序: [${drop.join(',')}]`);
+    }
+
+    // 5. 寫回 7788.js 檔案
     let rows = records.map(r => {
         let dateStr = r[0];
-        let shunStr = r[1].map(n => `'${n}'`).join(',');
-        return `['${dateStr}',[${shunStr}]]`;
+        let ballsStr = r[1].map(n => `'${n}'`).join(',');
+        return `['${dateStr}',[${ballsStr}]]`;
     }).join(',\n');
 
     let newContent = `var 7788 = [\n${rows}\n];\n`;
@@ -57,6 +64,7 @@ async function main() {
     console.log('7788.js 檔案更新完成！');
 }
 
+// 計算目標開獎日期的函數
 function getTargetDrawDate() {
     let now = new Date();
     let utc = now.getTime() + (now.getTimezoneOffset() * 60000);
@@ -81,41 +89,38 @@ function getTargetDrawDate() {
     return `${yyyy}-${mm}-${dd}`;
 }
 
-async function fetchLotteryShun(targetDate) {
+// 抓取網頁並同時解析「落球序」與「順序排序(順球)」
+async function fetchLotteryRecord(targetDate) {
     try {
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
 
-        const [y, m, d] = targetDate.split('-');
-        const mingGuoYear = parseInt(y) - 1911;
-        
-        const targets = [
-            `${mingGuoYear}/${m}/${d}`,
-            `${targetDate}`,
-            `${mingGuoYear}-${m}-${d}`
-        ];
-
-        let dateIdx = -1;
-        for (let t of targets) {
-            dateIdx = text.indexOf(t);
-            if (dateIdx !== -1) break;
-        }
-
+        // 尋找目標日期在網頁中的位置
+        let dateIdx = text.indexOf(targetDate);
         if (dateIdx === -1) return null;
 
-        const subText = text.substring(dateIdx, dateIdx + 500);
+        // 截取該日期之後的一段 HTML 進行解析
+        const subText = text.substring(dateIdx, dateIdx + 1000);
+
+        // 找出該行中所有的數字（利用正規表達式抓出二位數號碼）
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+        
+        if (!matches || matches.length < 12) return null;
 
-        if (!matches || matches.length < 6) return null;
+        // 根據網站表格結構：日期後面會依序跟著「落球序(5顆)」與「順序排序(5顆)」
+        // 我們直接從抓到的數字陣列中過濾並切出這兩組
+        // 這裡確保抓到的都是合法的 539 號碼 (01~39)
+        let validBalls = matches.filter(n => {
+            let num = parseInt(n, 10);
+            return num >= 1 && num <= 39;
+        });
 
-        let mIdx = matches.indexOf(m);
-        let dIdx = matches.indexOf(d, mIdx + 1);
+        if (validBalls.length >= 10) {
+            // 前 5 個為落球序，後 5 個為順球（大小順序）
+            let drop = validBalls.slice(0, 5).map(n => n.padStart(2, '0'));
+            let shun = validBalls.slice(5, 10).map(n => n.padStart(2, '0'));
 
-        if (dIdx !== -1 && matches.length >= dIdx + 6) {
-            let shun = matches.slice(dIdx + 1, dIdx + 6);
-            if (shun.length === 5 && !shun.includes('00')) {
-                return shun;
-            }
+            return { shun, drop };
         }
     } catch (e) {
         console.error('抓取發生錯誤:', e.message);
