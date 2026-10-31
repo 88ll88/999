@@ -24,34 +24,25 @@ async function main() {
     let targetDate = getTargetDrawDate();
     console.log(`目標日期: ${targetDate}，7788.js 首列日期: ${topDate}`);
 
-    let lotteryData = await fetchLotteryRecord(targetDate);
-    if (!lotteryData) {
-        console.log(`[${targetDate}] 官方尚未開獎或找不到資料。`);
+    let drop = await fetchLotteryDrop(targetDate);
+    if (!drop || drop.length !== 5) {
+        console.log(`[${targetDate}] 官方尚未開獎或落球資料不完全。`);
         return;
     }
 
-    let { drop, shun } = lotteryData;
-
-    // 20:40 階段：若首列落後，先用「順球（大小排序）」插入首列
+    // 邏輯判斷：
+    // 1. 若首列日期小於目標日期：直接插入新首列
     if (topDate < targetDate) {
-        if (shun && shun.length === 5) {
-            records.unshift([targetDate, shun]);
-            console.log(`[20:40 階段] 插入順球新首列: ${targetDate} [${shun.join(',')}]`);
-        } else {
-            console.log(`[${targetDate}] 順球資料尚未備妥。`);
-            return;
-        }
-    } else if (topDate === targetDate) {
-        console.log(`[同日期] ${targetDate} 已存在於首列。`);
+        records.unshift([targetDate, drop]);
+        console.log(`[新增首列] 成功插入 ${targetDate} 落球序: [${drop.join(',')}]`);
+    } 
+    // 2. 若首列日期剛好等於目標日期：直接替換首列
+    else if (topDate === targetDate) {
+        topRecord[1] = drop;
+        console.log(`[更新首列] 成功替換 ${targetDate} 落球序: [${drop.join(',')}]`);
     } else {
         console.log('首列日期大於目標日期，無需更新。');
         return;
-    }
-
-    // 21:00 階段：精準替換首列為真正的落球序
-    if (drop && drop.length === 5) {
-        records[0][1] = drop;
-        console.log(`[21:00 階段] 已將首列 ${targetDate} 替換為真正的落球序: [${drop.join(',')}]`);
     }
 
     let rows = records.map(r => {
@@ -87,14 +78,14 @@ function getTargetDrawDate() {
     return `${yyyy}-${mm}-${dd}`;
 }
 
-async function fetchLotteryRecord(targetDate) {
+async function fetchLotteryDrop(targetDate) {
     try {
         const res = await fetch('http://www.9800.com.tw/lotto539/drop.html');
         const text = await res.text();
 
         let dateIdx = text.indexOf(targetDate);
         let searchKey = targetDate;
-        
+
         if (dateIdx === -1) {
             const [y, m, d] = targetDate.split('-');
             const mingGuoYear = parseInt(y) - 1911;
@@ -103,18 +94,15 @@ async function fetchLotteryRecord(targetDate) {
             if (dateIdx === -1) return null;
         }
 
-        // 關鍵修正：從「日期字串結束的位置」開始往後截取，完全避開日期本身的數字
-        const subText = text.substring(dateIdx + searchKey.length, dateIdx + searchKey.length + 600);
-        
+        // 從日期字串結束位置開始往後抓取落球序
+        const subText = text.substring(dateIdx + searchKey.length, dateIdx + searchKey.length + 300);
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
-        if (!matches || matches.length < 10) return null;
 
-        // 嚴格取前 5 個為落球，接下來 5 個為順球
+        if (!matches || matches.length < 5) return null;
+
         let drop = matches.slice(0, 5).map(n => n.padStart(2, '0'));
-        let shun = matches.slice(5, 10).map(n => n.padStart(2, '0'));
-
-        if (drop.length === 5 && shun.length === 5) {
-            return { drop, shun };
+        if (drop.length === 5) {
+            return drop;
         }
     } catch (e) {
         console.error('抓取發生錯誤:', e.message);
