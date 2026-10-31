@@ -30,14 +30,10 @@ async function main() {
         return;
     }
 
-    // 邏輯判斷：
-    // 1. 若首列日期小於目標日期：直接插入新首列
     if (topDate < targetDate) {
         records.unshift([targetDate, drop]);
         console.log(`[新增首列] 成功插入 ${targetDate} 落球序: [${drop.join(',')}]`);
-    } 
-    // 2. 若首列日期剛好等於目標日期：直接替換首列
-    else if (topDate === targetDate) {
+    } else if (topDate === targetDate) {
         topRecord[1] = drop;
         console.log(`[更新首列] 成功替換 ${targetDate} 落球序: [${drop.join(',')}]`);
     } else {
@@ -94,7 +90,6 @@ async function fetchLotteryDrop(targetDate) {
             if (dateIdx === -1) return null;
         }
 
-        // 從日期字串結束位置開始往後抓取落球序
         const subText = text.substring(dateIdx + searchKey.length, dateIdx + searchKey.length + 300);
         const matches = subText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
 
