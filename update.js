@@ -11,9 +11,23 @@ const MAX_ATTEMPTS = 3;
 const SHUN_INTERVAL_MS = 1 * 60 * 1000;   // 順球：每 1 分鐘
 const LUOQIU_INTERVAL_MS = 3 * 60 * 1000; // 落球：每 3 分鐘
 
+// 取得格式化的台灣時間字串 (用於 Log)
+function getTaiwanTimestamp() {
+    let now = new Date();
+    let utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    let twTime = new Date(utc + (3600000 * 8));
+    let yyyy = twTime.getFullYear();
+    let mm = String(twTime.getMonth() + 1).padStart(2, '0');
+    let dd = String(twTime.getDate()).padStart(2, '0');
+    let hh = String(twTime.getHours()).padStart(2, '0');
+    let min = String(twTime.getMinutes()).padStart(2, '0');
+    let ss = String(twTime.getSeconds()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+
 async function main() {
-    let targetDate = getTargetDrawDate();
-    console.log(`[${new Date().toISOString()}] 開始執行，目標日期: ${targetDate}`);
+    let targetDate = "2026-11-07"; 
+    console.log(`[${getTaiwanTimestamp()}] [啟動] 開始執行自動更新程式，目標日期鎖定: ${targetDate}`);
 
     try {
         let fileData = await getFileContent();
@@ -22,40 +36,41 @@ async function main() {
 
         let topRecord = records[0];
         let topDate = topRecord[0];
-        let topVal = topRecord[2]; // 檢查是否有標記 1
+        let topVal = topRecord[2];
 
-        // 判斷是否直接從落球開始（條件：日期相符且標記為 1）
         if (topDate === targetDate && topVal === 1) {
-            console.log(`[檢查] 發現 vvv[0][2] = 1，順球已完成，直接從落球開始...`);
+            console.log(`[${getTaiwanTimestamp()}] [檢查] 發現 vvv[0][2] = 1，順球已完成，直接從落球階段開始...`);
             let success = await retryLuoqiu(records, sha, targetDate);
-            if (success) return;
-            console.log(`[結束] 落球重試 3 次皆失敗，關閉等待下個排程。`);
+            if (success) {
+                console.log(`[${getTaiwanTimestamp()}] [完成] 本次排程順利結束（僅執行落球）。`);
+                return;
+            }
+            console.log(`[${getTaiwanTimestamp()}] [結束] 落球重試 3 次皆失敗。`);
             return;
         }
 
-        console.log(`[檢查] 從順球階段開始...`);
+        console.log(`[${getTaiwanTimestamp()}] [檢查] 從順球階段開始...`);
         let shunSuccess = await retryShun(records, sha, targetDate);
         if (shunSuccess) {
-            // 順球成功後，立刻接著嘗試落球
+            console.log(`[${getTaiwanTimestamp()}] [轉換] 順球完成，準備進入落球階段...`);
             let updatedData = await getFileContent();
             await retryLuoqiu(updatedData.records, updatedData.sha, targetDate);
         } else {
-            console.log(`[結束] 順球重試 3 次皆失敗，關閉等待下個排程。`);
+            console.log(`[${getTaiwanTimestamp()}] [結束] 順球重試 3 次皆失敗。`);
         }
 
     } catch (e) {
-        console.error(`執行發生錯誤:`, e.message);
+        console.error(`[${getTaiwanTimestamp()}] [錯誤] 執行發生例外錯誤:`, e.message);
     }
 }
 
-// 順球重試邏輯（每 1 分鐘 1 次，最多 3 次）
 async function retryShun(records, sha, targetDate) {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        console.log(`[順球] 第 ${attempt} 次嘗試抓取...`);
+        console.log(`[${getTaiwanTimestamp()}] [順球] 第 ${attempt} 次嘗試抓取 (目標日期: ${targetDate})...`);
         let shun = await fetchShunPilio(targetDate);
         
         if (shun && shun.length === 5) {
-            console.log(`[順球成功] 取得號碼: ${shun.join(', ')}`);
+            console.log(`[${getTaiwanTimestamp()}] [順球成功] 取得號碼: ${shun.join(', ')}`);
             let topRecord = records[0];
             let topDate = topRecord[0];
 
@@ -68,9 +83,9 @@ async function retryShun(records, sha, targetDate) {
             return true;
         }
 
-        console.log(`[順球失敗] 第 ${attempt} 次未成功`);
+        console.log(`[${getTaiwanTimestamp()}] [順球失敗] 第 ${attempt} 次未抓到有效號碼`);
         if (attempt < MAX_ATTEMPTS) {
-            console.log(`等待 1 分鐘後再次嘗試順球...`);
+            console.log(`[${getTaiwanTimestamp()}] [等待] 將於 1 分鐘後進行第 ${attempt + 1} 次重試...`);
             await new Promise(r => setTimeout(r, SHUN_INTERVAL_MS));
             let fresh = await getFileContent();
             records = fresh.records;
@@ -80,23 +95,21 @@ async function retryShun(records, sha, targetDate) {
     return false;
 }
 
-// 落球重試邏輯（每 3 分鐘 1 次，最多 3 次）
 async function retryLuoqiu(records, sha, targetDate) {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        console.log(`[落球] 第 ${attempt} 次嘗試抓取...`);
+        console.log(`[${getTaiwanTimestamp()}] [落球] 第 ${attempt} 次嘗試抓取 (目標日期: ${targetDate})...`);
         let luoqiu = await fetchLuoqiu9800(targetDate);
         
         if (luoqiu && luoqiu.length === 5) {
-            console.log(`[落球成功] 取得號碼: ${luoqiu.join(', ')}`);
-            // 替換首列：完全換成落球號碼，移除順球與 ,1 標記
+            console.log(`[${getTaiwanTimestamp()}] [落球成功] 取得號碼: ${luoqiu.join(', ')}`);
             records[0] = [targetDate, luoqiu];
             await saveFile(records, sha);
             return true;
         }
 
-        console.log(`[落球失敗] 第 ${attempt} 次未成功`);
+        console.log(`[${getTaiwanTimestamp()}] [落球失敗] 第 ${attempt} 次未抓到有效號碼`);
         if (attempt < MAX_ATTEMPTS) {
-            console.log(`等待 3 分鐘後再次嘗試落球...`);
+            console.log(`[${getTaiwanTimestamp()}] [等待] 將於 3 分鐘後進行第 ${attempt + 1} 次重試...`);
             await new Promise(r => setTimeout(r, LUOQIU_INTERVAL_MS));
             let fresh = await getFileContent();
             records = fresh.records;
@@ -127,25 +140,17 @@ async function saveFile(records, sha) {
     }).join(',\n');
 
     let newContent = `var ${VAR_NAME} = [\n${rows}\n];\n`;
+    let encodedContent = Buffer.from(newContent, 'utf-8').toString('base64');
+
     await octokit.repos.createOrUpdateFileContents({
         owner: OWNER,
         repo: REPO,
         path: PATH,
-        message: `auto: update vvv.js`,
-        content: Buffer.from(newContent).toString('utf-8'),
+        message: `auto: update vvv.js with logs`,
+        content: encodedContent,
         sha: sha
     });
-    console.log(`[已儲存檔案] ${PATH}`);
-}
-
-function getTargetDrawDate() {
-    let now = new Date();
-    let utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    let twTime = new Date(utc + (3600000 * 8));
-    let yyyy = twTime.getFullYear();
-    let mm = String(twTime.getMonth() + 1).padStart(2, '0');
-    let dd = String(twTime.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
+    console.log(`[${getTaiwanTimestamp()}] [儲存成功] 已成功寫入並更新 ${PATH}`);
 }
 
 async function fetchShunPilio(targetDate) {
@@ -154,12 +159,18 @@ async function fetchShunPilio(targetDate) {
         let text = await res.text();
         let [y, m, d] = targetDate.split('-');
         let targetStr = `${m}/${d}`;
+        
         let idx = text.indexOf(targetStr);
         if (idx === -1) return null;
-        let sub = text.substring(idx, idx + 300);
-        let matches = sub.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
-        if (matches && matches.length >= 5) {
-            return matches.slice(0, 5);
+
+        let sub = text.substring(idx, idx + 600);
+        let numCellMatch = sub.match(/class="number-cell"[^>]*>([\s\S]*?)<\/td>/);
+        if (numCellMatch) {
+            let numText = numCellMatch[1];
+            let matches = numText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+            if (matches && matches.length >= 5) {
+                return matches.slice(0, 5);
+            }
         }
     } catch (e) {}
     return null;
@@ -170,21 +181,19 @@ async function fetchLuoqiu9800(targetDate) {
         let res = await fetch('http://www.9800.com.tw/lotto539/');
         let text = await res.text();
         let [y, m, d] = targetDate.split('-');
-        // 支援網站上可能出現的完整日期或僅月-日格式 (例如 11-06)
         let targetFull = `${y}-${m}-${d}`;
-        let targetShort = `${m}-${d}`;
         
         let idx = text.indexOf(targetFull);
-        if (idx === -1) {
-            idx = text.indexOf(targetShort);
-        }
         if (idx === -1) return null;
 
-        let sub = text.substring(idx, idx + 400);
-        let matches = sub.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
-        if (matches && matches.length >= 10) {
-            let luoqiu = matches.slice(5, 10);
-            if (luoqiu.length === 5) return luoqiu;
+        let trSub = text.substring(idx - 100, idx + 500);
+        let tds = trSub.match(/<td[^>]*>([\s\S]*?)<\/td>/gi);
+        if (tds && tds.length >= 4) {
+            let fourthTd = tds[3];
+            let matches = fourthTd.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+            if (matches && matches.length >= 5) {
+                return matches.slice(0, 5);
+            }
         }
     } catch (e) {}
     return null;
