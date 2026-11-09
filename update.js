@@ -46,6 +46,7 @@ async function main() {
 }
 
 async function fetchArclinkDrawBall(timeStamp) {
+async function fetchArclinkDrawBall(timeStamp) {
     try {
         const res = await fetch('https://lotto2.arclink.com.tw/539/539open-1.html', {
             headers: {
@@ -55,12 +56,20 @@ async function fetchArclinkDrawBall(timeStamp) {
         const buffer = await res.arrayBuffer();
         const text = new TextDecoder('big5').decode(buffer);
 
-        const matches = text.match(/<td[^>]*bgcolor=["']?#?[0-9a-fA-F]{6}["']?[^>]*>(\d{2})<\/td>/gi);
-        if (matches && matches.length >= 5) {
-            return matches.slice(0, 5).map(td => {
+        // 用更寬鬆的正則抓取所有 td 裡的兩位數號碼，排除標題干擾
+        const matches = text.match(/<td[^>]*>(\d{2})<\/td>/gi);
+        if (matches) {
+            let validBalls = [];
+            for (let td of matches) {
                 let m = td.match(/>(\d{2})</);
-                return m ? m[1] : null;
-            }).filter(Boolean);
+                if (m) {
+                    validBalls.push(m[1]);
+                }
+            }
+            // 只要抓到 5 個或以上，取前 5 個就是開獎號碼
+            if (validBalls.length >= 5) {
+                return validBalls.slice(0, 5);
+            }
         }
     } catch (e) {
         console.error(`[${timeStamp}] 抓取網頁失敗:`, e.message);
