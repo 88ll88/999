@@ -10,7 +10,6 @@ async function main() {
         const todayStr = getTaiwanTodayStr();
         console.log(`[${timeStamp}] 判定目標日期為: ${todayStr}`);
 
-        // 1. 讀取主檔案
         const primaryTarget = TARGET_FILES[0];
         const fileData = await getRepositoryData(primaryTarget);
         if (!fileData) {
@@ -26,37 +25,34 @@ async function main() {
             return;
         }
 
-        // 2. 抓取網頁號碼
         console.log(`[${timeStamp}] 開始從網頁抓取落球...`);
         const drawBalls = await fetchArclinkDrawBall(timeStamp);
 
         if (!drawBalls || drawBalls.length !== 5) {
-            console.log(`[${timeStamp}] 尚未取得完整的 5 顆落球，等待下一輪...`);
-            return;
+            throw new Error(`抓取到的落球數量不足 5 顆: ${JSON.stringify(drawBalls)}`);
         }
 
         console.log(`[${timeStamp}] 成功取得 5 顆落球:`, drawBalls);
 
-        // 3. 組合並插入首列
         const newEntry = [todayStr, drawBalls];
         records.unshift(newEntry);
 
-        // 4. 同步寫入雙倉庫
         for (const target of TARGET_FILES) {
             await updateFileOnGitHub(target, records, timeStamp);
         }
         console.log(`[${timeStamp}] === 所有更新程序圓滿完成 ===`);
 
     } catch (err) {
-        console.error(`[${timeStamp}] 發生嚴重錯誤 (Fatal Error):`, err);
-        process.exit(1); // 確保失敗時 GitHub Actions 能正確顯示紅燈並抓到錯誤
+        console.error(`[${timeStamp}] 發生嚴重錯誤 (Fatal Error):`, err.message);
+        process.exit(1);
     }
 }
 
 async function fetchArclinkDrawBall(timeStamp) {
     const res = await fetch('https://lotto2.arclink.com.tw/539/539open-1.html', {
+        redirect: 'follow',
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
     });
     if (!res.ok) throw new Error(`網頁請求失敗，狀態碼: ${res.status}`);
@@ -85,23 +81,19 @@ async function getRepositoryData(target) {
         }
     });
     if (!res.ok) {
-        console.error(`GitHub API 讀取失敗 ${path}: ${res.status} ${res.statusText}`);
+        console.error(`GitHub API 讀取失敗 ${path}: ${res.status}`);
         return null;
     }
     const data = await res.json();
     const content = Buffer.from(data.content, 'base64').toString('utf-8');
     
     const match = content.match(new RegExp(`var\\s+${varName}\\s*=\\s*(\\[[\\s\\S]*\\]);?`));
-    if (!match) {
-        console.error(`無法在檔案中用正則匹配到變數 ${varName}`);
-        return null;
-    }
+    if (!match) return null;
     
     try {
         let records = eval('(' + match[1] + ')');
         return { records, sha: data.sha };
     } catch (e) {
-        console.error(`解析陣列內容失敗:`, e.message);
         return null;
     }
 }
