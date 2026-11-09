@@ -1,16 +1,13 @@
-name: Auto Update Lottery Data
+name: update-data
 
 on:
   schedule:
-    # 台灣時間 20:35 (UTC 12:35)
+    # 台灣時間 20:35, 21:00, 21:30, 22:00
     - cron: '35 12 * * 1-6'
-    # 台灣時間 21:00 (UTC 13:00)
     - cron: '0 13 * * 1-6'
-    # 台灣時間 21:30 (UTC 13:30)
     - cron: '30 13 * * 1-6'
-    # 台灣時間 22:00 (UTC 14:00)
     - cron: '0 14 * * 1-6'
-  workflow_dispatch: # 支援手動觸發
+  workflow_dispatch:
 
 jobs:
   update-data:
