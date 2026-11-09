@@ -47,11 +47,15 @@ async function main() {
 
 async function fetchArclinkDrawBall(timeStamp) {
     try {
-        const res = await fetch('https://lotto2.arclink.com.tw/539/539open-1.html');
+        const res = await fetch('https://lotto2.arclink.com.tw/539/539open-1.html', {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        });
         const buffer = await res.arrayBuffer();
         const text = new TextDecoder('big5').decode(buffer);
 
-        const matches = text.match(/<td[^>]*bgcolor=["']?#ffff99["']?[^>]*>(\d{2})<\/td>/gi);
+        const matches = text.match(/<td[^>]*bgcolor=["']?#?[0-9a-fA-F]{6}["']?[^>]*>(\d{2})<\/td>/gi);
         if (matches && matches.length >= 5) {
             return matches.slice(0, 5).map(td => {
                 let m = td.match(/>(\d{2})</);
