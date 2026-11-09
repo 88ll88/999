@@ -5,76 +5,74 @@ const TARGET_FILES = [
 
 async function main() {
     const timeStamp = getTaiwanTimestamp();
-    const todayStr = getTaiwanTodayStr(); // 20:35 換日規則計算的目標日期
+    try {
+        console.log(`[${timeStamp}] === 開始執行更新程式 ===`);
+        const todayStr = getTaiwanTodayStr();
+        console.log(`[${timeStamp}] 判定目標日期為: ${todayStr}`);
 
-    console.log(`[${timeStamp}] 檢查更新狀態，判定目標日期為: ${todayStr}`);
+        // 1. 讀取主檔案
+        const primaryTarget = TARGET_FILES[0];
+        const fileData = await getRepositoryData(primaryTarget);
+        if (!fileData) {
+            throw new Error(`無法讀取或解析 ${primaryTarget.path}`);
+        }
 
-    const primaryTarget = TARGET_FILES[0];
-    const fileData = await getRepositoryData(primaryTarget);
-    if (!fileData) {
-        console.error(`[${timeStamp}] 讀取 ${primaryTarget.path} 失敗，終止程序。`);
-        return;
-    }
+        let records = fileData.records;
+        let latestDateInFile = records.length > 0 ? records[0][0] : '';
+        console.log(`[${timeStamp}] 目前檔案最新日期 vvv[0][0] 為: ${latestDateInFile}`);
 
-    let records = fileData.records;
-    let latestDateInFile = records.length > 0 ? records[0][0] : '';
-    console.log(`[${timeStamp}] 目前檔案最新日期 vvv[0][0] 為: ${latestDateInFile}`);
+        if (latestDateInFile >= todayStr) {
+            console.log(`[${timeStamp}] 已經是最新的 (${todayStr})，結束行程。`);
+            return;
+        }
 
-    // 若 vvv[0][0] 已經等於或大於目標日期，自動關閉
-    if (latestDateInFile >= todayStr) {
-        console.log(`[${timeStamp}] vvv[0][0] (${latestDateInFile}) 已是最新的目標日期 (${todayStr})，自動更新關閉。`);
-        return;
-    }
+        // 2. 抓取網頁號碼
+        console.log(`[${timeStamp}] 開始從網頁抓取落球...`);
+        const drawBalls = await fetchArclinkDrawBall(timeStamp);
 
-    console.log(`[${timeStamp}] vvv[0][0] 小於目標日期，前往網站抓取最新落球資料...`);
-    const drawBalls = await fetchArclinkDrawBall(timeStamp);
+        if (!drawBalls || drawBalls.length !== 5) {
+            console.log(`[${timeStamp}] 尚未取得完整的 5 顆落球，等待下一輪...`);
+            return;
+        }
 
-    if (!drawBalls || drawBalls.length !== 5) {
-        console.log(`[${timeStamp}] 尚未取得完整的 5 顆落球，等待下一輪排程...`);
-        return;
-    }
+        console.log(`[${timeStamp}] 成功取得 5 顆落球:`, drawBalls);
 
-    // 組合並插入首列：['YYYY-MM-DD',['xx','xx','xx','xx','xx']] (單引號、無空格)
-    const newEntry = [todayStr, drawBalls];
-    records.unshift(newEntry);
-    console.log(`[${timeStamp}] 成功抓取落球！插入首列:`, JSON.stringify(newEntry));
+        // 3. 組合並插入首列
+        const newEntry = [todayStr, drawBalls];
+        records.unshift(newEntry);
 
-    // 同步寫入 vvv.js 與 ddd.js
-    for (const target of TARGET_FILES) {
-        await updateFileOnGitHub(target, records, timeStamp);
+        // 4. 同步寫入雙倉庫
+        for (const target of TARGET_FILES) {
+            await updateFileOnGitHub(target, records, timeStamp);
+        }
+        console.log(`[${timeStamp}] === 所有更新程序圓滿完成 ===`);
+
+    } catch (err) {
+        console.error(`[${timeStamp}] 發生嚴重錯誤 (Fatal Error):`, err);
+        process.exit(1); // 確保失敗時 GitHub Actions 能正確顯示紅燈並抓到錯誤
     }
 }
 
 async function fetchArclinkDrawBall(timeStamp) {
-async function fetchArclinkDrawBall(timeStamp) {
-    try {
-        const res = await fetch('https://lotto2.arclink.com.tw/539/539open-1.html', {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-        });
-        const buffer = await res.arrayBuffer();
-        const text = new TextDecoder('big5').decode(buffer);
-
-        // 用更寬鬆的正則抓取所有 td 裡的兩位數號碼，排除標題干擾
-        const matches = text.match(/<td[^>]*>(\d{2})<\/td>/gi);
-        if (matches) {
-            let validBalls = [];
-            for (let td of matches) {
-                let m = td.match(/>(\d{2})</);
-                if (m) {
-                    validBalls.push(m[1]);
-                }
-            }
-            // 只要抓到 5 個或以上，取前 5 個就是開獎號碼
-            if (validBalls.length >= 5) {
-                return validBalls.slice(0, 5);
-            }
+    const res = await fetch('https://lotto2.arclink.com.tw/539/539open-1.html', {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-    } catch (e) {
-        console.error(`[${timeStamp}] 抓取網頁失敗:`, e.message);
+    });
+    if (!res.ok) throw new Error(`網頁請求失敗，狀態碼: ${res.status}`);
+    
+    const buffer = await res.arrayBuffer();
+    const text = new TextDecoder('big5').decode(buffer);
+
+    const matches = text.match(/<td[^>]*>(\d{2})<\/td>/gi);
+    if (!matches) return null;
+
+    let validBalls = [];
+    for (let td of matches) {
+        let m = td.match(/>(\d{2})</);
+        if (m) validBalls.push(m[1]);
     }
-    return null;
+    return validBalls.length >= 5 ? validBalls.slice(0, 5) : null;
 }
 
 async function getRepositoryData(target) {
@@ -86,18 +84,32 @@ async function getRepositoryData(target) {
             'Accept': 'application/vnd.github+json'
         }
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+        console.error(`GitHub API 讀取失敗 ${path}: ${res.status} ${res.statusText}`);
+        return null;
+    }
     const data = await res.json();
     const content = Buffer.from(data.content, 'base64').toString('utf-8');
+    
     const match = content.match(new RegExp(`var\\s+${varName}\\s*=\\s*(\\[[\\s\\S]*\\]);?`));
-    if (!match) return null;
-    return { records: eval('(' + match[1] + ')'), sha: data.sha };
+    if (!match) {
+        console.error(`無法在檔案中用正則匹配到變數 ${varName}`);
+        return null;
+    }
+    
+    try {
+        let records = eval('(' + match[1] + ')');
+        return { records, sha: data.sha };
+    } catch (e) {
+        console.error(`解析陣列內容失敗:`, e.message);
+        return null;
+    }
 }
 
 async function updateFileOnGitHub(target, records, timeStamp) {
     const { owner, repo, path, varName } = target;
     const data = await getRepositoryData(target);
-    if (!data) return;
+    if (!data) throw new Error(`準備更新時無法取得 ${path} 的 SHA`);
 
     let rows = records.map(r => `  ['${r[0]}',['${r[1].join("','")}']]`).join(',\n');
     let newContent = `var ${varName} = [\n${rows}\n];\n`;
@@ -117,11 +129,11 @@ async function updateFileOnGitHub(target, records, timeStamp) {
         })
     });
 
-    if (res.ok) {
-        console.log(`[${timeStamp}] 成功更新檔案至: ${owner}/${repo}/${path}`);
-    } else {
-        console.error(`[${timeStamp}] 更新失敗 ${owner}/${repo}/${path}: ${res.status}`);
+    if (!res.ok) {
+        let errBody = await res.text();
+        throw new Error(`更新 GitHub 檔案 ${path} 失敗 (${res.status}): ${errBody}`);
     }
+    console.log(`成功更新至: ${owner}/${repo}/${path}`);
 }
 
 function getTaiwanTodayStr() {
