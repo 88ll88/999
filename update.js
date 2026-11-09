@@ -50,7 +50,8 @@ function getLotteryTodayStr() {
 async function fetchArclinkDrawBall(timestamp) {
     try {
         const res = await fetch('https://lotto2.arclink.com.tw/539/539open-1.html');
-        const text = await res.text();
+        const buffer = await res.arrayBuffer();
+        const text = new TextDecoder('big5').decode(buffer);
         const matches = text.match(/<td[^>]*bgcolor=["']?#ffff99["']?[^>]*>(\d{2})<\/td>/gi);
         if (matches && matches.length >= 5) {
             return matches.slice(0, 5).map(td => {
