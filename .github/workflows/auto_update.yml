@@ -2,28 +2,32 @@ name: Auto Update Lottery Data
 
 on:
   schedule:
-    - cron: '37 12 * * 1-6' # 台灣時間 20:37
-    - cron: '00 13 * * 1-6' # 台灣時間 21:00
-    - cron: '30 13 * * 1-6' # 台灣時間 21:30
-    - cron: '00 12 * * 1-6' # 台灣時間 20:00
-  workflow_dispatch:
+    # 台灣時間 20:35 (UTC 12:35)
+    - cron: '35 12 * * 1-6'
+    # 台灣時間 21:00 (UTC 13:00)
+    - cron: '0 13 * * 1-6'
+    # 台灣時間 21:30 (UTC 13:30)
+    - cron: '30 13 * * 1-6'
+    # 台灣時間 22:00 (UTC 14:00)
+    - cron: '0 14 * * 1-6'
+  workflow_dispatch: # 支援手動觸發
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: '18'
 
       - name: Install dependencies
-        run: npm install @octokit/rest
+        run: npm install @octokit/rest node-fetch
 
       - name: Run update script
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          PAT_88LL88: ${{ secrets.PAT_88LL88 }}
         run: node update.js
