@@ -5,47 +5,41 @@ const TARGET_FILES = [
 
 async function main() {
     const timeStamp = getTaiwanTimestamp();
-    try {
-        console.log(`[${timeStamp}] === 開始執行更新程式 ===`);
-        const todayStr = getTaiwanTodayStr();
-        console.log(`[${timeStamp}] 判定目標日期為: ${todayStr}`);
+    console.log(`[${timeStamp}] === 開始執行更新程式 ===`);
+    const todayStr = getTaiwanTodayStr();
+    console.log(`[${timeStamp}] 判定目標日期為: ${todayStr}`);
 
-        const primaryTarget = TARGET_FILES[0];
-        const fileData = await getRepositoryData(primaryTarget);
-        if (!fileData) {
-            throw new Error(`無法讀取或解析 ${primaryTarget.path}`);
-        }
-
-        let records = fileData.records;
-        let latestDateInFile = records.length > 0 ? records[0][0] : '';
-        console.log(`[${timeStamp}] 目前檔案最新日期 vvv[0][0] 為: ${latestDateInFile}`);
-
-        if (latestDateInFile >= todayStr) {
-            console.log(`[${timeStamp}] 已經是最新的 (${todayStr})，結束行程。`);
-            return;
-        }
-
-        console.log(`[${timeStamp}] 開始從網頁抓取落球...`);
-        const drawBalls = await fetchArclinkDrawBall(timeStamp);
-
-        if (!drawBalls || drawBalls.length !== 5) {
-            throw new Error(`抓取到的落球數量不足 5 顆: ${JSON.stringify(drawBalls)}`);
-        }
-
-        console.log(`[${timeStamp}] 成功取得 5 顆落球:`, drawBalls);
-
-        const newEntry = [todayStr, drawBalls];
-        records.unshift(newEntry);
-
-        for (const target of TARGET_FILES) {
-            await updateFileOnGitHub(target, records, timeStamp);
-        }
-        console.log(`[${timeStamp}] === 所有更新程序圓滿完成 ===`);
-
-    } catch (err) {
-        console.error(`[${timeStamp}] 發生嚴重錯誤 (Fatal Error):`, err.message);
-        process.exit(1);
+    const primaryTarget = TARGET_FILES[0];
+    const fileData = await getRepositoryData(primaryTarget);
+    if (!fileData) {
+        throw new Error(`無法讀取或解析 ${primaryTarget.path}`);
     }
+
+    let records = fileData.records;
+    let latestDateInFile = records.length > 0 ? records[0][0] : '';
+    console.log(`[${timeStamp}] 目前檔案最新日期 vvv[0][0] 為: ${latestDateInFile}`);
+
+    if (latestDateInFile >= todayStr) {
+        console.log(`[${timeStamp}] 已經是最新的 (${todayStr})，結束行程。`);
+        return;
+    }
+
+    console.log(`[${timeStamp}] 開始從網頁抓取落球...`);
+    const drawBalls = await fetchArclinkDrawBall(timeStamp);
+
+    if (!drawBalls || drawBalls.length !== 5) {
+        throw new Error(`抓取到的落球數量不足 5 顆: ${JSON.stringify(drawBalls)}`);
+    }
+
+    console.log(`[${timeStamp}] 成功取得 5 顆落球:`, drawBalls);
+
+    const newEntry = [todayStr, drawBalls];
+    records.unshift(newEntry);
+
+    for (const target of TARGET_FILES) {
+        await updateFileOnGitHub(target, records, timeStamp);
+    }
+    console.log(`[${timeStamp}] === 所有更新程序圓滿完成 ===`);
 }
 
 async function fetchArclinkDrawBall(timeStamp) {
@@ -60,7 +54,7 @@ async function fetchArclinkDrawBall(timeStamp) {
     const buffer = await res.arrayBuffer();
     const text = new TextDecoder('big5').decode(buffer);
 
-    const matches = text.match(/<td[^>]*>(\d{2})<\/td>/gi);
+    const matches = text.match(/<td[^>]*bgcolor=["']?#ffff99["']?[^>]*>(\d{2})<\/td>/gi) || text.match(/<td[^>]*>(\d{2})<\/td>/gi);
     if (!matches) return null;
 
     let validBalls = [];
@@ -80,22 +74,12 @@ async function getRepositoryData(target) {
             'Accept': 'application/vnd.github+json'
         }
     });
-    if (!res.ok) {
-        console.error(`GitHub API 讀取失敗 ${path}: ${res.status}`);
-        return null;
-    }
+    if (!res.ok) return null;
     const data = await res.json();
     const content = Buffer.from(data.content, 'base64').toString('utf-8');
-    
     const match = content.match(new RegExp(`var\\s+${varName}\\s*=\\s*(\\[[\\s\\S]*\\]);?`));
     if (!match) return null;
-    
-    try {
-        let records = eval('(' + match[1] + ')');
-        return { records, sha: data.sha };
-    } catch (e) {
-        return null;
-    }
+    return { records: eval('(' + match[1] + ')'), sha: data.sha };
 }
 
 async function updateFileOnGitHub(target, records, timeStamp) {
@@ -125,7 +109,6 @@ async function updateFileOnGitHub(target, records, timeStamp) {
         let errBody = await res.text();
         throw new Error(`更新 GitHub 檔案 ${path} 失敗 (${res.status}): ${errBody}`);
     }
-    console.log(`成功更新至: ${owner}/${repo}/${path}`);
 }
 
 function getTaiwanTodayStr() {
@@ -153,4 +136,7 @@ function getTaiwanTimestamp() {
     return twTime.toISOString().replace('T', ' ').substring(0, 19);
 }
 
-main();
+main().catch(err => {
+    console.error("Fatal Error:", err);
+    process.exit(1);
+});
