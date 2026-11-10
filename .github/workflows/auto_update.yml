@@ -1,15 +1,15 @@
-name: Auto Update 539
+name: Auto Update Lottery Data
 
 on:
   schedule:
-    - cron: '35 12 * * 1-6'
-    - cron: '0 13 * * 1-6'
-    - cron: '30 13 * * 1-6'
-    - cron: '0 14 * * 1-6'
+    - cron: '37 12 * * 1-6' # 台灣時間 20:37
+    - cron: '00 13 * * 1-6' # 台灣時間 21:00
+    - cron: '30 13 * * 1-6' # 台灣時間 21:30
+    - cron: '00 12 * * 1-6' # 台灣時間 20:00
   workflow_dispatch:
 
 jobs:
-  update:
+  update-data:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -21,15 +21,9 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install axios cheerio iconv-lite
+        run: npm install @octokit/rest
 
       - name: Run update script
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: node update.js
-
-      - name: Commit and push changes
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add vvv.js
-          git commit -m "Auto-update 539 results for today" || exit 0
-          git push
