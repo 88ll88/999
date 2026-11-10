@@ -1,10 +1,7 @@
-
 name: Auto Update 539
 
 on:
   schedule:
-    # 台灣時間 (UTC+8) 20:35, 21:00, 21:30, 22:00
-    #對應 UTC 時間分別為: 12:35, 13:00, 13:30, 14:00
     - cron: '35 12 * * 1-6'
     - cron: '0 13 * * 1-6'
     - cron: '30 13 * * 1-6'
@@ -21,7 +18,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
 
       - name: Install dependencies
         run: npm install axios cheerio
