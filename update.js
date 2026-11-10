@@ -1,53 +1,206 @@
-const fs = require('fs');
+const { Octokit } = require("@octokit/rest");
 
-async function updateLotto() {
-    const timestamp = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-    console.log(`\n[${timestamp}] 🚀 開始執行今彩539更新作業...`);
+const octokit = new Octokit({ auth: process.env.GH_PAT });
+
+const OWNER = '88ll88';
+const REPO = '999';
+const PATH = 'vvv.js';
+const VAR_NAME = 'vvv';
+
+const MAX_ATTEMPTS = 3;
+const SHUN_INTERVAL_MS = 1 * 60 * 1000;   // 順球：每 1 分鐘
+const LUOQIU_INTERVAL_MS = 3 * 60 * 1000; // 落球：每 3 分鐘
+
+async function main() {
+    let targetDate = getTargetDrawDate();
+    console.log(`[${new Date().toISOString()}] 開始執行，目標日期: ${targetDate}`);
 
     try {
-        // 如果抓不到網頁，這裡可以先用固定的測試號碼或您自行指定的號碼寫入
-        const numbers = ['33', '30', '07', '09', '28'];
-        
-        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
-        const newEntry = `['${today}',['${numbers.join("','")}']]`;
-        
-        console.log(`[成功] 今日日期: ${today}，號碼組合: ${newEntry}`);
+        let fileData = await getFileContent();
+        let records = fileData.records;
+        let sha = fileData.sha;
 
-        updateFile('vvv.js', newEntry, today);
+        let topRecord = records[0];
+        let topDate = topRecord[0];
+        let topVal = topRecord[2];
 
-    } catch (error) {
-        console.error(`❌ 【錯誤】更新失敗：`, error.message);
+        // 檢查是否直接從落球開始（條件：日期相符且標記為 1）
+        if (topDate === targetDate && topVal === 1) {
+            console.log(`[檢查] 發現 vvv[0][2] = 1，順球已完成，直接從落球開始...`);
+            let success = await retryLuoqiu(records, sha, targetDate);
+            if (success) return;
+            console.log(`[結束] 落球重試 3 次皆失敗，關閉等待下個排程。`);
+            return;
+        }
+
+        console.log(`[檢查] 從順球階段開始...`);
+        let shunSuccess = await retryShun(records, sha, targetDate);
+        if (shunSuccess) {
+            let updatedData = await getFileContent();
+            await retryLuoqiu(updatedData.records, updatedData.sha, targetDate);
+        } else {
+            console.log(`[結束] 順球重試 3 次皆失敗，關閉等待下個排程。`);
+        }
+
+    } catch (e) {
+        console.error(`執行發生錯誤:`, e.message);
     }
 }
 
-function updateFile(filePath, newEntry, today) {
-    if (!fs.existsSync(filePath)) {
-        console.log(`⚠️ 找不到 ${filePath} 檔案，跳過寫入。`);
-        return;
+// 順球重試邏輯（每 1 分鐘 1 次，最多 3 次）
+async function retryShun(records, sha, targetDate) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        console.log(`[順球] 第 ${attempt} 次嘗試抓取...`);
+        let shun = await fetchShunPilio(targetDate);
+        
+        if (shun && shun.length === 5) {
+            console.log(`[順球成功] 取得號碼: ${shun.join(', ')}`);
+            let topRecord = records[0];
+            let topDate = topRecord[0];
+
+            if (topDate === targetDate) {
+                records[0] = [targetDate, shun, 1];
+            } else {
+                records.unshift([targetDate, shun, 1]);
+            }
+            await saveFile(records, sha);
+            return true;
+        }
+
+        console.log(`[順球失敗] 第 ${attempt} 次未成功`);
+        if (attempt < MAX_ATTEMPTS) {
+            console.log(`等待 1 分鐘後再次嘗試順球...`);
+            await new Promise(r => setTimeout(r, SHUN_INTERVAL_MS));
+            let fresh = await getFileContent();
+            records = fresh.records;
+            sha = fresh.sha;
+        }
     }
-
-    let content = fs.readFileSync(filePath, 'utf8');
-
-    if (content.includes(today)) {
-        console.log(`✨ ${filePath} 今天已經更新過了，無需重複寫入。`);
-        return;
-    }
-
-    let updatedContent = '';
-    if (content.includes('var vvv = [')) {
-        updatedContent = content.replace('var vvv = [', `var vvv = [\n    ${newEntry},`);
-    } else {
-        updatedContent = content.replace(/=\s*\[/, `= [\n    ${newEntry},`);
-    }
-
-    fs.writeFileSync(filePath, updatedContent, 'utf8');
-    console.log(`✅ ${filePath} 寫入成功！`);
+    return false;
 }
 
-updateLotto();
-```[cite: 5]
+// 落球重試邏輯（每 3 分鐘 1 次，最多 3 次）
+async function retryLuoqiu(records, sha, targetDate) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        console.log(`[落球] 第 ${attempt} 次嘗試抓取...`);
+        let luoqiu = await fetchLuoqiu9800(targetDate);
+        
+        if (luoqiu && luoqiu.length === 5) {
+            console.log(`[落球成功] 取得號碼: ${luoqiu.join(', ')}`);
+            records[0] = [targetDate, luoqiu];
+            await saveFile(records, sha);
+            return true;
+        }
 
-<ElicitationsGroup message="請選擇下一步操作：">
-  <Elicitation label="使用這支直接寫入的程式碼來完成自動更新測試" query="請教如何將這支直接寫入的 update.js 部署到 GitHub 測試。"/>
-  <Elicitation label="徹底放棄這個爬蟲，改用手動或別的方式" query="我想放棄這個自動爬蟲，請問有其他簡單的替代方案嗎？"/>
-</ElicitationsGroup>
+        console.log(`[落球失敗] 第 ${attempt} 次未成功`);
+        if (attempt < MAX_ATTEMPTS) {
+            console.log(`等待 3 分鐘後再次嘗試落球...`);
+            await new Promise(r => setTimeout(r, LUOQIU_INTERVAL_MS));
+            let fresh = await getFileContent();
+            records = fresh.records;
+            sha = fresh.sha;
+        }
+    }
+    return false;
+}
+
+async function getFileContent() {
+    let res = await octokit.repos.getContent({ owner: OWNER, repo: REPO, path: PATH });
+    let content = Buffer.from(res.data.content, 'base64').toString('utf-8');
+    let sha = res.data.sha;
+    let regex = new RegExp(`var\\s+${VAR_NAME}\\s*=\\s*(\\[[\\s\\S]*\\]);?`);
+    let match = content.match(regex);
+    let records = eval('(' + match[1] + ')');
+    return { records, sha };
+}
+
+async function saveFile(records, sha) {
+    let rows = records.map(r => {
+        let dateStr = r[0];
+        let nums = r[1].map(n => `'${n}'`).join(',');
+        if (r.length === 3 && r[2] === 1) {
+            return `  ['${dateStr}',[${nums}],1]`;
+        }
+        return `  ['${dateStr}',[${nums}]]`;
+    }).join(',\n');
+
+    let newContent = `var ${VAR_NAME} = [\n${rows}\n];\n`;
+    let encodedContent = Buffer.from(newContent, 'utf-8').toString('base64');
+
+    await octokit.repos.createOrUpdateFileContents({
+        owner: OWNER,
+        repo: REPO,
+        path: PATH,
+        message: `auto: update vvv.js`,
+        content: encodedContent,
+        sha: sha
+    });
+    console.log(`[已儲存檔案] ${PATH}`);
+}
+
+function getTargetDrawDate() {
+    let now = new Date();
+    let utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    let twTime = new Date(utc + (3600000 * 8));
+    
+    let hours = twTime.getHours();
+    let minutes = twTime.getMinutes();
+    
+    if (hours * 60 + minutes < 20 * 60 + 30) {
+        twTime.setDate(twTime.getDate() - 1);
+    }
+    
+    let yyyy = twTime.getFullYear();
+    let mm = String(twTime.getMonth() + 1).padStart(2, '0');
+    let dd = String(twTime.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+async function fetchShunPilio(targetDate) {
+    try {
+        let res = await fetch('https://www.pilio.idv.tw/lto539/list.asp');
+        let text = await res.text();
+        let [y, m, d] = targetDate.split('-');
+        let targetStr = `${m}/${d}`;
+        
+        let idx = text.indexOf(targetStr);
+        if (idx === -1) return null;
+
+        let sub = text.substring(idx, idx + 600);
+        let numCellMatch = sub.match(/class="number-cell"[^>]*>([\s\S]*?)<\/td>/);
+        if (numCellMatch) {
+            let numText = numCellMatch[1];
+            let matches = numText.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+            if (matches && matches.length >= 5) {
+                return matches.slice(0, 5);
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
+async function fetchLuoqiu9800(targetDate) {
+    try {
+        let res = await fetch('http://www.9800.com.tw/lotto539/');
+        let text = await res.text();
+        let [y, m, d] = targetDate.split('-');
+        let targetFull = `${y}-${m}-${d}`;
+        let targetShort = `${m}-${d}`;
+        
+        let idx = text.indexOf(targetFull);
+        if (idx === -1) {
+            idx = text.indexOf(targetShort);
+        }
+        if (idx === -1) return null;
+
+        let sub = text.substring(idx, idx + 400);
+        let matches = sub.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+        if (matches && matches.length >= 10) {
+            let luoqiu = matches.slice(5, 10);
+            if (luoqiu.length === 5) return luoqiu;
+        }
+    } catch (e) {}
+    return null;
+}
+
+main();
