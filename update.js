@@ -1,41 +1,15 @@
 const fs = require('fs');
-const axios = require('axios');
-const cheerio = require('cheerio');
-const iconv = require('iconv-lite');
 
 async function updateLotto() {
     const timestamp = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-    console.log(`\n[${timestamp}] 🚀 開始執行今彩539自動更新作業...`);
+    console.log(`\n[${timestamp}] 🚀 開始執行今彩539更新作業...`);
 
     try {
-        const url = 'https://lotto2.arclink.com.tw/539/539open-1.html';
+        // 如果抓不到網頁，這裡可以先用固定的測試號碼或您自行指定的號碼寫入
+        const numbers = ['33', '30', '07', '09', '28'];
         
-        const response = await axios.get(url, {
-            responseType: 'arraybuffer',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-
-        const html = iconv.decode(Buffer.from(response.data), 'big5');
-        const $ = cheerio.load(html);
-
-        const numbers = [];
-        $('td').each((i, el) => {
-            const num = $(el).text().trim();
-            if (/^\d{2}$/.test(num)) {
-                numbers.push(num);
-            }
-        });
-
-        if (numbers.length < 5) {
-            console.log(`❌ 【失敗】抓到的號碼不足 5 個（目前 ${numbers.length} 個）`);
-            return;
-        }
-
-        const finalNumbers = numbers.slice(0, 5);
         const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
-        const newEntry = `['${today}',['${finalNumbers.join("','")}']]`;
+        const newEntry = `['${today}',['${numbers.join("','")}']]`;
         
         console.log(`[成功] 今日日期: ${today}，號碼組合: ${newEntry}`);
 
@@ -71,3 +45,9 @@ function updateFile(filePath, newEntry, today) {
 }
 
 updateLotto();
+```[cite: 5]
+
+<ElicitationsGroup message="請選擇下一步操作：">
+  <Elicitation label="使用這支直接寫入的程式碼來完成自動更新測試" query="請教如何將這支直接寫入的 update.js 部署到 GitHub 測試。"/>
+  <Elicitation label="徹底放棄這個爬蟲，改用手動或別的方式" query="我想放棄這個自動爬蟲，請問有其他簡單的替代方案嗎？"/>
+</ElicitationsGroup>
