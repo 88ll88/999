@@ -193,14 +193,22 @@ async function fetchLuoqiu9800(targetDate) {
         }
         if (idx === -1) return null;
 
-        let sub = text.substring(idx, idx + 400);
-        let matches = sub.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
-        if (matches && matches.length >= 10) {
-            let luoqiu = matches.slice(5, 10);
-            if (luoqiu.length === 5) return luoqiu;
+        // 截取該筆開獎列附近的 HTML 區域
+        let sub = text.substring(idx, idx + 1000);
+        
+        // 抓取所有 <td> 內容，並依您的規則：第四個 td 即為落球號碼
+        let tdMatches = sub.match(/<td[^>]*>([\s\S]*?)<\/td>/gi);
+        if (tdMatches && tdMatches.length >= 4) {
+            // 假設第四個 td 內包含落球的 5 個號碼
+            let fourthTdContent = tdMatches[3];
+            let matches = fourthTdContent.match(/\b(0[1-9]|[12][0-9]|3[0-9])\b/g);
+            if (matches && matches.length >= 5) {
+                return matches.slice(0, 5);
+            }
         }
-    } catch (e) {}
+    } catch (e) {
+        console.error('落球抓取錯誤:', e.message);
+    }
     return null;
 }
-
 main();
